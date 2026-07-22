@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Risk Calculator - IDX Trading</title>
+<style>
+  :root{
+    --bg:#0B0F14; --surface:#121923; --surface-2:#1A2431; --border:#26333F;
+    --text-primary:#E8EEF3; --text-secondary:#8B9AAA; --text-muted:#5C6B7A;
+    --green:#00D68F; --green-dim:#0A3B2E; --red:#FF5266; --red-dim:#3B1420;
+    --amber:#FFB020; --amber-dim:#3D2C0A;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--text-primary); font-family:var(--sans); padding:20px 16px 60px; min-height:100vh;}
+  .wrap{max-width:720px; margin:0 auto;}
+  .header{display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:20px; border-bottom:1px solid var(--border); padding-bottom:16px;}
+  .header h1{font-size:19px; font-weight:600; margin:0; letter-spacing:0.3px;}
+  .header .sub{color:var(--text-muted); font-size:12px; font-family:var(--mono); margin-top:4px;}
+  .header .user-badge{font-size:12px; color:var(--text-secondary); display:flex; align-items:center; gap:8px;}
+  .header .user-badge button{background:none; border:1px solid var(--border); color:var(--text-secondary); border-radius:6px; padding:4px 10px; font-size:11px; cursor:pointer;}
+  .tabs{display:flex; gap:2px; background:var(--surface); border-radius:10px; padding:3px; margin-bottom:20px;}
+  .tab{flex:1; text-align:center; padding:9px 12px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; color:var(--text-secondary); transition:all .15s; user-select:none;}
+  .tab.active{background:var(--surface-2); color:var(--text-primary);}
+  .panel{display:none;}
+  .panel.active{display:block;}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:14px;}
+  .card-title{font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-muted); margin:0 0 14px; font-weight:600;}
+  .field-row{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;}
+  .field{display:flex; flex-direction:column; gap:6px;}
+  .field label{font-size:12px; color:var(--text-secondary);}
+  .field input, .field select{background:var(--surface-2); border:1px solid var(--border); color:var(--text-primary); padding:9px 10px; border-radius:8px; font-size:14px; font-family:var(--mono); width:100%;}
+  .field input:focus, .field select:focus{outline:none; border-color:var(--green);}
+  .btn{background:var(--green); color:#04231A; border:none; padding:11px 18px; border-radius:8px; font-weight:700; font-size:14px; cursor:pointer; width:100%; transition:opacity .15s;}
+  .btn:hover{opacity:0.88;}
+  .btn:disabled{opacity:0.5; cursor:not-allowed;}
+  .btn.secondary{background:transparent; border:1px solid var(--border); color:var(--text-primary);}
+  .btn-row{display:flex; gap:10px;}
+  .err{background:var(--red-dim); border:1px solid var(--red); color:#FFB3BE; padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:14px;}
+  .warn{background:var(--amber-dim); border:1px solid var(--amber); color:#FFD98A; padding:10px 12px; border-radius:8px; font-size:12px; margin-top:12px;}
+  .result-hero{text-align:center; padding:20px 10px; background:var(--surface-2); border-radius:10px; margin-bottom:14px;}
+  .result-hero .label{font-size:12px; color:var(--text-secondary); margin-bottom:6px;}
+  .result-hero .value{font-size:38px; font-weight:700; font-family:var(--mono); color:var(--green); line-height:1;}
+  .result-hero .sub{font-size:12px; color:var(--text-muted); margin-top:6px; font-family:var(--mono);}
+  .gauge-wrap{margin:14px 0;}
+  .gauge-label{display:flex; justify-content:space-between; font-size:11px; color:var(--text-secondary); margin-bottom:6px; font-family:var(--mono);}
+  .gauge-track{height:8px; background:var(--surface-2); border-radius:4px; overflow:hidden; border:1px solid var(--border);}
+  .gauge-fill{height:100%; background:var(--green); border-radius:4px; transition:width .3s;}
+  .stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .stat{background:var(--surface-2); border-radius:8px; padding:10px 12px;}
+  .stat .k{font-size:11px; color:var(--text-muted); margin-bottom:4px;}
+  .stat .v{font-size:15px; font-weight:600; font-family:var(--mono);}
+  .stat .v.pos{color:var(--green);}
+  .stat .v.neg{color:var(--red);}
+  .j-entry{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 14px; margin-bottom:10px;}
+  .j-top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;}
+  .j-ticker{font-size:15px; font-weight:700; font-family:var(--mono);}
+  .j-date{font-size:11px; color:var(--text-muted);}
+  .j-status{font-size:10px; padding:2px 8px; border-radius:5px; font-weight:700; text-transform:uppercase;}
+  .status-open{background:var(--amber-dim); color:var(--amber);}
+  .status-tp{background:var(--green-dim); color:var(--green);}
+  .status-sl{background:var(--red-dim); color:var(--red);}
+  .status-manual{background:var(--surface-2); color:var(--text-secondary);}
+  .j-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; font-size:12px; margin-bottom:10px;}
+  .j-grid .k{color:var(--text-muted); font-size:10px;}
+  .j-grid .v{font-family:var(--mono); font-weight:600;}
+  .j-actions{display:flex; gap:8px;}
+  .j-actions button{flex:1; font-size:12px; padding:6px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text-secondary); cursor:pointer;}
+  .j-actions button:hover{background:var(--surface-2);}
+  .empty{text-align:center; padding:40px 20px; color:var(--text-muted); font-size:13px;}
+  .modal-overlay{display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; z-index:50; padding:20px;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; max-width:400px; width:100%; max-height:85vh; overflow-y:auto;}
+  .modal h3{margin:0 0 14px; font-size:15px;}
+  .close-x{cursor:pointer; color:var(--text-muted); font-size:18px; float:right;}
+
+  /* auth screen */
+  #auth-screen{max-width:360px; margin:80px auto; padding:0 16px;}
+  #auth-screen .card{padding:24px;}
+  #auth-screen h2{margin:0 0 4px; font-size:18px;}
+  #auth-screen .sub{color:var(--text-muted); font-size:12px; margin-bottom:18px; font-family:var(--mono);}
+  #auth-toggle{text-align:center; margin-top:12px; font-size:12px; color:var(--text-secondary); cursor:pointer;}
+  #auth-toggle span{color:var(--green); font-weight:600;}
+  #app-screen{display:none;}
+  .loading-screen{text-align:center; padding:100px 20px; color:var(--text-muted); font-family:var(--mono); font-size:13px;}
+</style>
+</head>
+<body>
+
+<div id="loading-screen" class="loading-screen">Menghubungkan ke Firebase...</div>
+
+<!-- AUTH SCREEN -->
+<div id="auth-screen" style="display:none;">
+  <div class="card">
+    <h2 id="auth-title">Masuk</h2>
+    <div class="sub">Risk Calculator &middot; IDX</div>
+    <div class="field" style="margin-bottom:12px;">
+      <label>Email</label>
+      <input type="email" id="auth-email" placeholder="email@kamu.com">
+    </div>
+    <div class="field" style="margin-bottom:16px;">
+      <label>Password</label>
+      <input type="password" id="auth-password" placeholder="minimal 6 karakter">
+    </div>
+    <div id="auth-err"></div>
+    <button class="btn" id="btn-auth-submit">Masuk</button>
+    <div id="auth-toggle">Belum punya akun? <span>Daftar di sini</span></div>
+  </div>
+</div>
+
+<!-- APP SCREEN -->
+<div id="app-screen">
+<div class="wrap">
+  <div class="header">
+    <div>
+      <h1>Risk Calculator</h1>
+      <div class="sub">position sizing &middot; IDX</div>
+    </div>
+    <div class="user-badge">
+      <span id="user-email"></span>
+      <button id="btn-logout">Keluar</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="calc">Kalkulator</div>
+    <div class="tab" data-tab="journal">Jurnal Trading</div>
+  </div>
+
+  <div class="panel active" id="panel-calc">
+    <div class="card">
+      <p class="card-title">Rencana trade</p>
+      <div class="field-row">
+        <div class="field"><label>Ticker</label><input type="text" id="in-ticker" placeholder="cth. AMMN" style="text-transform:uppercase;"></div>
+        <div class="field"><label>Modal (Rp)</label><input type="number" id="in-modal" placeholder="10000000" inputmode="numeric"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Entry (Rp)</label><input type="number" id="in-entry" placeholder="1540" inputmode="numeric"></div>
+        <div class="field"><label>Stop loss (Rp)</label><input type="number" id="in-sl" placeholder="1450" inputmode="numeric"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Take profit (Rp)</label><input type="number" id="in-tp" placeholder="1675" inputmode="numeric"></div>
+        <div class="field"><label>Risiko (%)</label><input type="number" id="in-risk" placeholder="1" step="0.1" inputmode="decimal"></div>
+      </div>
+      <button class="btn" id="btn-calc">Hitung lot maksimal</button>
+      <div id="err-box"></div>
+    </div>
+    <div id="result-box" style="display:none;"></div>
+  </div>
+
+  <div class="panel" id="panel-journal">
+    <div id="journal-stats"></div>
+    <div class="btn-row" style="margin-bottom:14px;">
+      <button class="btn secondary" id="btn-export-csv">Export CSV</button>
+    </div>
+    <div id="journal-list"></div>
+  </div>
+</div>
+</div>
+
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <span class="close-x" id="modal-close">&times;</span>
+    <h3>Edit entry</h3>
+    <div class="field" style="margin-bottom:10px;"><label>Ticker</label><input type="text" id="edit-ticker"></div>
+    <div class="field-row">
+      <div class="field"><label>Entry</label><input type="number" id="edit-entry"></div>
+      <div class="field"><label>SL</label><input type="number" id="edit-sl"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>TP</label><input type="number" id="edit-tp"></div>
+      <div class="field"><label>Lot</label><input type="number" id="edit-lot"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Modal</label><input type="number" id="edit-modal"></div>
+      <div class="field"><label>Risiko %</label><input type="number" id="edit-risk" step="0.1"></div>
+    </div>
+    <div class="field" style="margin-bottom:10px;">
+      <label>Status</label>
+      <select id="edit-status">
+        <option value="open">Open</option>
+        <option value="tp">Kena TP</option>
+        <option value="sl">Kena SL</option>
+        <option value="manual">Manual close</option>
+      </select>
+    </div>
+    <div class="field" style="margin-bottom:10px;"><label>Harga exit (opsional)</label><input type="number" id="edit-exit"></div>
+    <div class="field" style="margin-bottom:14px;"><label>Catatan</label><input type="text" id="edit-notes"></div>
+    <button class="btn" id="btn-save-edit">Simpan perubahan</button>
+  </div>
+</div>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<script>
+/* ============================================================
+   GANTI KONFIGURASI INI DENGAN FIREBASE PROJECT KAMU SENDIRI
+   (Project settings > General > Your apps > SDK setup and config)
+   Bisa pakai project Firebase yang sama dengan Monthly-budget,
+   collection-nya sudah dipisah otomatis: users/{uid}/risk_trades
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyA3n0UvMY2YeiqvtlpGyhvXyAeURZ-rdfc",
+  authDomain: "management-trading.firebaseapp.com",
+  projectId: "management-trading",
+  storageBucket: "management-trading.firebasestorage.app",
+  messagingSenderId: "663022225344",
+  appId: "1:663022225344:web:5a41b571b4e27047f52a25"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+let isRegisterMode = false;
+let currentUser = null;
+let currentCalc = null;
+let editingId = null;
+let unsubscribeJournal = null;
+let journalCache = [];
+
+function fmtRp(n){ return 'Rp' + Math.round(n).toLocaleString('id-ID'); }
+function fmtNum(n){ return Math.round(n).toLocaleString('id-ID'); }
+
+// ---------- AUTH ----------
+auth.onAuthStateChanged(user => {
+  document.getElementById('loading-screen').style.display = 'none';
+  if(user){
+    currentUser = user;
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('app-screen').style.display = 'block';
+    document.getElementById('user-email').textContent = user.email;
+    subscribeJournal();
+  } else {
+    currentUser = null;
+    document.getElementById('app-screen').style.display = 'none';
+    document.getElementById('auth-screen').style.display = 'block';
+    if(unsubscribeJournal){ unsubscribeJournal(); unsubscribeJournal = null; }
+  }
+});
+
+document.getElementById('auth-toggle').addEventListener('click', ()=>{
+  isRegisterMode = !isRegisterMode;
+  document.getElementById('auth-title').textContent = isRegisterMode ? 'Daftar akun' : 'Masuk';
+  document.getElementById('btn-auth-submit').textContent = isRegisterMode ? 'Daftar' : 'Masuk';
+  document.getElementById('auth-toggle').innerHTML = isRegisterMode
+    ? 'Sudah punya akun? <span>Masuk di sini</span>'
+    : 'Belum punya akun? <span>Daftar di sini</span>';
+  document.getElementById('auth-err').innerHTML = '';
+});
+
+document.getElementById('btn-auth-submit').addEventListener('click', async ()=>{
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const errBox = document.getElementById('auth-err');
+  errBox.innerHTML = '';
+  if(!email || !password){
+    errBox.innerHTML = '<div class="err">Email dan password harus diisi.</div>';
+    return;
+  }
+  try{
+    if(isRegisterMode){
+      await auth.createUserWithEmailAndPassword(email, password);
+    } else {
+      await auth.signInWithEmailAndPassword(email, password);
+    }
+  }catch(e){
+    errBox.innerHTML = '<div class="err">' + translateAuthError(e.code) + '</div>';
+  }
+});
+
+function translateAuthError(code){
+  const map = {
+    'auth/email-already-in-use': 'Email sudah terdaftar, coba masuk saja.',
+    'auth/invalid-email': 'Format email tidak valid.',
+    'auth/weak-password': 'Password minimal 6 karakter.',
+    'auth/user-not-found': 'Email belum terdaftar.',
+    'auth/wrong-password': 'Password salah.',
+    'auth/invalid-credential': 'Email atau password salah.'
+  };
+  return map[code] || 'Terjadi kesalahan: ' + code;
+}
+
+document.getElementById('btn-logout').addEventListener('click', ()=> auth.signOut());
+
+// ---------- TABS ----------
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('panel-'+t.dataset.tab).classList.add('active');
+  });
+});
+
+// ---------- CALCULATOR ----------
+document.getElementById('btn-calc').addEventListener('click', runCalc);
+
+function runCalc(){
+  const errBox = document.getElementById('err-box');
+  const resultBox = document.getElementById('result-box');
+  errBox.innerHTML = '';
+  resultBox.style.display = 'none';
+
+  const ticker = document.getElementById('in-ticker').value.trim().toUpperCase() || '-';
+  const modal = parseFloat(document.getElementById('in-modal').value);
+  const entry = parseFloat(document.getElementById('in-entry').value);
+  const sl = parseFloat(document.getElementById('in-sl').value);
+  const tp = parseFloat(document.getElementById('in-tp').value);
+  const riskPct = parseFloat(document.getElementById('in-risk').value);
+
+  const errors = [];
+  if(!modal || modal <= 0) errors.push('Modal harus diisi dan lebih dari 0.');
+  if(!entry || entry <= 0) errors.push('Harga entry harus diisi dan lebih dari 0.');
+  if(!sl || sl <= 0) errors.push('Stop loss harus diisi dan lebih dari 0.');
+  if(!tp || tp <= 0) errors.push('Take profit harus diisi dan lebih dari 0.');
+  if(!riskPct || riskPct <= 0) errors.push('Persentase risiko harus diisi dan lebih dari 0.');
+  if(entry && sl && sl >= entry) errors.push('Stop loss harus di bawah harga entry.');
+  if(entry && tp && tp <= entry) errors.push('Take profit harus di atas harga entry.');
+
+  if(errors.length){
+    errBox.innerHTML = '<div class="err">' + errors.join('<br>') + '</div>';
+    return;
+  }
+
+  const riskAmount = modal * (riskPct/100);
+  const riskPerShare = entry - sl;
+  const lotByRisk = Math.floor(riskAmount / riskPerShare / 100);
+  const lotByCapital = Math.floor(modal / entry / 100);
+  const maxLot = Math.min(lotByRisk, lotByCapital);
+  const binding = lotByRisk <= lotByCapital ? 'risk' : 'capital';
+
+  const actualShares = maxLot * 100;
+  const actualRisk = actualShares * riskPerShare;
+  const actualRiskPct = modal > 0 ? (actualRisk / modal) * 100 : 0;
+  const positionValue = actualShares * entry;
+  const capitalUsedPct = modal > 0 ? (positionValue / modal) * 100 : 0;
+  const potentialProfit = actualShares * (tp - entry);
+  const rr = riskPerShare > 0 ? (tp - entry) / riskPerShare : 0;
+
+  currentCalc = { ticker, entry, sl, tp, modal, riskPct, maxLot, actualShares, actualRisk, actualRiskPct, positionValue, potentialProfit, rr };
+
+  let html = '';
+  if(maxLot <= 0){
+    resultBox.innerHTML = '<div class="card"><div class="err" style="margin-bottom:0;">Modal tidak cukup untuk membeli 1 lot pun dengan parameter ini. Perbesar modal, perkecil risiko, atau cari entry dengan SL lebih dekat.</div></div>';
+    resultBox.style.display = 'block';
+    return;
+  }
+
+  html += `
+    <div class="card">
+      <div class="result-hero">
+        <div class="label">Lot maksimal yang boleh dibeli</div>
+        <div class="value">${fmtNum(maxLot)} lot</div>
+        <div class="sub">${fmtNum(actualShares)} lembar &middot; ${fmtRp(positionValue)}</div>
+      </div>
+      <div class="gauge-wrap">
+        <div class="gauge-label"><span>Risiko aktual kalau kena SL</span><span>${actualRiskPct.toFixed(2)}% dari target ${riskPct}%</span></div>
+        <div class="gauge-track"><div class="gauge-fill" style="width:${Math.min(100,(actualRiskPct/riskPct)*100)}%"></div></div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="k">Rugi jika kena SL</div>
+          <div class="v neg">-${fmtRp(actualRisk)}</div>
+          <div class="k" style="margin-top:4px;">${(((sl-entry)/entry)*100).toFixed(2)}% dari entry</div>
+        </div>
+        <div class="stat">
+          <div class="k">Profit jika kena TP</div>
+          <div class="v pos">+${fmtRp(potentialProfit)}</div>
+          <div class="k" style="margin-top:4px;">+${(((tp-entry)/entry)*100).toFixed(2)}% dari entry</div>
+        </div>
+        <div class="stat"><div class="k">Modal terpakai</div><div class="v">${capitalUsedPct.toFixed(1)}%</div></div>
+        <div class="stat"><div class="k">Risk : Reward</div><div class="v">1 : ${rr.toFixed(2)}</div></div>
+      </div>
+      ${binding === 'capital' ? (() => {
+        const idealCapital = lotByRisk * 100 * entry;
+        const shortfall = idealCapital - modal;
+        const idealRisk = lotByRisk * 100 * riskPerShare;
+        const idealProfit = lotByRisk * 100 * (tp - entry);
+        return `<div class="warn">
+          Lot dibatasi oleh modal, bukan oleh risiko. Risiko 1%-mu sebenarnya mengizinkan ${fmtNum(lotByRisk)} lot, tapi modal saat ini cuma cukup untuk ${fmtNum(lotByCapital)} lot.
+          <br><br><b>Modal ideal supaya lot risk-based tercapai penuh:</b> ${fmtRp(idealCapital)}<br>Kurang ${fmtRp(shortfall)} dari modal saat ini.
+          <br><br>Kalau modal segitu terpenuhi &mdash; rugi saat kena SL tetap ${fmtRp(idealRisk)} (masih 1% dari modal ideal), tapi profit saat kena TP naik jadi ${fmtRp(idealProfit)}.
+        </div>`;
+      })() : ''}
+      ${rr < 1.5 ? '<div class="warn">Rasio risk:reward di bawah 1:1.5, pertimbangkan cari entry atau target lain.</div>' : ''}
+      <button class="btn secondary" id="btn-save-journal" style="margin-top:14px;">Simpan ke jurnal</button>
+    </div>
+  `;
+  resultBox.innerHTML = html;
+  resultBox.style.display = 'block';
+  document.getElementById('btn-save-journal').addEventListener('click', saveToJournal);
+}
+
+// ---------- FIRESTORE JOURNAL ----------
+function journalRef(){
+  return db.collection('users').doc(currentUser.uid).collection('risk_trades');
+}
+
+async function saveToJournal(){
+  if(!currentCalc || !currentUser) return;
+  const btn = document.getElementById('btn-save-journal');
+  btn.disabled = true;
+  try{
+    await journalRef().add({
+      date: new Date().toISOString().slice(0,10),
+      ticker: currentCalc.ticker,
+      entry: currentCalc.entry,
+      sl: currentCalc.sl,
+      tp: currentCalc.tp,
+      lot: currentCalc.maxLot,
+      modal: currentCalc.modal,
+      riskPct: currentCalc.riskPct,
+      status: 'open',
+      exitPrice: null,
+      notes: '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    btn.textContent = 'Tersimpan ke jurnal ✓';
+    setTimeout(()=>{ btn.textContent = 'Simpan ke jurnal'; btn.disabled = false; }, 2000);
+  }catch(e){
+    console.error(e);
+    alert('Gagal menyimpan ke jurnal: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function subscribeJournal(){
+  if(unsubscribeJournal) unsubscribeJournal();
+  unsubscribeJournal = journalRef().orderBy('createdAt', 'desc').onSnapshot(snap => {
+    journalCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderJournal();
+  }, err => {
+    console.error(err);
+    document.getElementById('journal-list').innerHTML = '<div class="err">Gagal memuat jurnal: ' + err.message + '</div>';
+  });
+}
+
+function computePnl(e){
+  if(e.status === 'open') return null;
+  if(e.exitPrice) return e.lot * 100 * (e.exitPrice - e.entry);
+  if(e.status === 'tp') return e.lot * 100 * (e.tp - e.entry);
+  if(e.status === 'sl') return e.lot * 100 * (e.sl - e.entry);
+  return null;
+}
+
+function renderStats(list){
+  const statsBox = document.getElementById('journal-stats');
+  const closed = list.filter(e => e.status !== 'open');
+  if(closed.length === 0){
+    statsBox.innerHTML = `<div class="card"><p class="card-title">Statistik</p><div class="empty" style="padding:12px 0;">Belum ada trade yang closed (kena TP / kena SL / manual close).<br>Win rate akan muncul di sini setelah kamu update status trade-nya lewat tombol Edit.</div></div>`;
+    return;
+  }
+  const withPnl = closed.map(e => ({e, pnl: computePnl(e)})).filter(x => x.pnl !== null);
+  const wins = withPnl.filter(x => x.pnl > 0);
+  const losses = withPnl.filter(x => x.pnl <= 0);
+  const winRate = withPnl.length > 0 ? (wins.length / withPnl.length) * 100 : 0;
+  const totalPnl = withPnl.reduce((s,x)=>s+x.pnl, 0);
+  const avgWin = wins.length > 0 ? wins.reduce((s,x)=>s+x.pnl,0)/wins.length : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((s,x)=>s+x.pnl,0)/losses.length : 0;
+  statsBox.innerHTML = `
+    <div class="card">
+      <p class="card-title">Statistik (${withPnl.length} trade closed)</p>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Win rate</div><div class="v ${winRate>=50?'pos':'neg'}">${winRate.toFixed(1)}%</div></div>
+        <div class="stat"><div class="k">Total P/L</div><div class="v ${totalPnl>=0?'pos':'neg'}">${totalPnl>=0?'+':''}${fmtRp(totalPnl)}</div></div>
+        <div class="stat"><div class="k">Rata-rata profit (win)</div><div class="v pos">+${fmtRp(avgWin)}</div></div>
+        <div class="stat"><div class="k">Rata-rata rugi (loss)</div><div class="v neg">${fmtRp(avgLoss)}</div></div>
+      </div>
+    </div>
+  `;
+}
+
+function exportCsv(list){
+  if(list.length === 0){ alert('Belum ada data jurnal untuk di-export.'); return; }
+  const headers = ['Tanggal','Ticker','Entry','SL','TP','Lot','Modal','Risiko %','Status','Harga Exit','P/L','Catatan'];
+  const rows = list.map(e => {
+    const pnl = computePnl(e);
+    return [e.date, e.ticker, e.entry, e.sl, e.tp, e.lot, e.modal, e.riskPct, e.status, e.exitPrice || '', pnl !== null ? Math.round(pnl) : '', (e.notes||'').replace(/"/g,'""')];
+  });
+  const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF' + csvContent], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'jurnal-trading-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('btn-export-csv').addEventListener('click', ()=> exportCsv(journalCache));
+
+function renderJournal(){
+  const container = document.getElementById('journal-list');
+  const list = journalCache;
+  renderStats(list);
+  if(list.length === 0){
+    container.innerHTML = '<div class="empty">Belum ada history trading.<br>Hitung dulu di tab Kalkulator lalu simpan ke jurnal.</div>';
+    return;
+  }
+  container.innerHTML = list.map(e => {
+    const statusLabel = {open:'Open', tp:'Kena TP', sl:'Kena SL', manual:'Manual'}[e.status] || 'Open';
+    const statusClass = {open:'status-open', tp:'status-tp', sl:'status-sl', manual:'status-manual'}[e.status] || 'status-open';
+    const pnl = computePnl(e);
+    const slPct = ((e.sl - e.entry) / e.entry) * 100;
+    const tpPct = ((e.tp - e.entry) / e.entry) * 100;
+    return `
+      <div class="j-entry">
+        <div class="j-top">
+          <div><span class="j-ticker">${e.ticker}</span><span class="j-date" style="margin-left:8px;">${e.date}</span></div>
+          <span class="j-status ${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="j-grid">
+          <div><div class="k">Entry</div><div class="v">${fmtNum(e.entry)}</div></div>
+          <div><div class="k">SL</div><div class="v" style="color:var(--red);">${fmtNum(e.sl)} <span style="font-size:10px;">(${slPct.toFixed(1)}%)</span></div></div>
+          <div><div class="k">TP</div><div class="v" style="color:var(--green);">${fmtNum(e.tp)} <span style="font-size:10px;">(+${tpPct.toFixed(1)}%)</span></div></div>
+          <div><div class="k">Lot</div><div class="v">${fmtNum(e.lot)}</div></div>
+        </div>
+        ${pnl !== null ? `<div style="font-size:12px; margin-bottom:10px;">P/L: <span style="font-family:var(--mono); font-weight:700; color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmtRp(pnl)}</span></div>` : ''}
+        ${e.notes ? `<div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">${e.notes}</div>` : ''}
+        <div class="j-actions">
+          <button data-action="edit" data-id="${e.id}">Edit</button>
+          <button data-action="delete" data-id="${e.id}">Hapus</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  container.querySelectorAll('[data-action="edit"]').forEach(b=> b.addEventListener('click', ()=> openEditModal(b.dataset.id)));
+  container.querySelectorAll('[data-action="delete"]').forEach(b=> b.addEventListener('click', ()=> deleteEntry(b.dataset.id)));
+}
+
+async function deleteEntry(id){
+  if(!confirm('Hapus entry ini dari jurnal?')) return;
+  try{ await journalRef().doc(id).delete(); }
+  catch(e){ alert('Gagal menghapus: ' + e.message); }
+}
+
+function openEditModal(id){
+  const e = journalCache.find(x => x.id === id);
+  if(!e) return;
+  editingId = id;
+  document.getElementById('edit-ticker').value = e.ticker;
+  document.getElementById('edit-entry').value = e.entry;
+  document.getElementById('edit-sl').value = e.sl;
+  document.getElementById('edit-tp').value = e.tp;
+  document.getElementById('edit-lot').value = e.lot;
+  document.getElementById('edit-modal').value = e.modal;
+  document.getElementById('edit-risk').value = e.riskPct;
+  document.getElementById('edit-status').value = e.status;
+  document.getElementById('edit-exit').value = e.exitPrice || '';
+  document.getElementById('edit-notes').value = e.notes || '';
+  document.getElementById('edit-modal').classList.add('show');
+}
+
+document.getElementById('modal-close').addEventListener('click', ()=>{
+  document.getElementById('edit-modal').classList.remove('show');
+});
+
+document.getElementById('btn-save-edit').addEventListener('click', async ()=>{
+  if(!editingId) return;
+  const btn = document.getElementById('btn-save-edit');
+  btn.disabled = true;
+  try{
+    await journalRef().doc(editingId).update({
+      ticker: document.getElementById('edit-ticker').value.trim().toUpperCase(),
+      entry: parseFloat(document.getElementById('edit-entry').value),
+      sl: parseFloat(document.getElementById('edit-sl').value),
+      tp: parseFloat(document.getElementById('edit-tp').value),
+      lot: parseFloat(document.getElementById('edit-lot').value),
+      modal: parseFloat(document.getElementById('edit-modal').value),
+      riskPct: parseFloat(document.getElementById('edit-risk').value),
+      status: document.getElementById('edit-status').value,
+      exitPrice: document.getElementById('edit-exit').value ? parseFloat(document.getElementById('edit-exit').value) : null,
+      notes: document.getElementById('edit-notes').value
+    });
+    document.getElementById('edit-modal').classList.remove('show');
+  }catch(e){
+    alert('Gagal menyimpan perubahan: ' + e.message);
+  }
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>
