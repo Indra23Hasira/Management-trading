@@ -9,7 +9,7 @@
     --bg:#0B0F14; --surface:#121923; --surface-2:#1A2431; --border:#26333F;
     --text-primary:#E8EEF3; --text-secondary:#8B9AAA; --text-muted:#5C6B7A;
     --green:#00D68F; --green-dim:#0A3B2E; --red:#FF5266; --red-dim:#3B1420;
-    --amber:#FFB020; --amber-dim:#3D2C0A;
+    --amber:#FFB020; --amber-dim:#3D2C0A; --blue:#4EA1FF; --blue-dim:#122840;
     --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   }
@@ -60,6 +60,16 @@
   .j-date{font-size:11px; color:var(--text-muted);}
   .j-status{font-size:10px; padding:2px 8px; border-radius:5px; font-weight:700; text-transform:uppercase;}
   .status-open{background:var(--amber-dim); color:var(--amber);}
+  .status-partial{background:var(--blue-dim); color:var(--blue);}
+  .status-closed-win{background:var(--green-dim); color:var(--green);}
+  .status-closed-loss{background:var(--red-dim); color:var(--red);}
+  .exit-list{background:var(--surface-2); border-radius:8px; padding:8px 10px; margin-bottom:10px;}
+  .exit-row{display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:4px 0; border-bottom:1px dashed var(--border);}
+  .exit-row:last-child{border-bottom:none;}
+  .exit-row .info{font-family:var(--mono); color:var(--text-secondary);}
+  .exit-row .pnl{font-family:var(--mono); font-weight:700;}
+  .exit-row button{background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:14px; padding:0 4px;}
+  .remaining-badge{font-size:11px; color:var(--text-muted); font-family:var(--mono); margin-bottom:8px;}
   .status-tp{background:var(--green-dim); color:var(--green);}
   .status-sl{background:var(--red-dim); color:var(--red);}
   .status-manual{background:var(--surface-2); color:var(--text-secondary);}
@@ -163,7 +173,7 @@
 <div class="modal-overlay" id="edit-modal">
   <div class="modal">
     <span class="close-x" id="modal-close">&times;</span>
-    <h3>Edit entry</h3>
+    <h3>Edit rencana trade</h3>
     <div class="field" style="margin-bottom:10px;"><label>Ticker</label><input type="text" id="edit-ticker"></div>
     <div class="field-row">
       <div class="field"><label>Entry</label><input type="number" id="edit-entry"></div>
@@ -171,24 +181,30 @@
     </div>
     <div class="field-row">
       <div class="field"><label>TP</label><input type="number" id="edit-tp"></div>
-      <div class="field"><label>Lot</label><input type="number" id="edit-lot"></div>
+      <div class="field"><label>Lot dibeli</label><input type="number" id="edit-lot"></div>
     </div>
     <div class="field-row">
       <div class="field"><label>Modal</label><input type="number" id="edit-modal"></div>
       <div class="field"><label>Risiko %</label><input type="number" id="edit-risk" step="0.1"></div>
     </div>
-    <div class="field" style="margin-bottom:10px;">
-      <label>Status</label>
-      <select id="edit-status">
-        <option value="open">Open</option>
-        <option value="tp">Kena TP</option>
-        <option value="sl">Kena SL</option>
-        <option value="manual">Manual close</option>
-      </select>
-    </div>
-    <div class="field" style="margin-bottom:10px;"><label>Harga exit (opsional)</label><input type="number" id="edit-exit"></div>
     <div class="field" style="margin-bottom:14px;"><label>Catatan</label><input type="text" id="edit-notes"></div>
     <button class="btn" id="btn-save-edit">Simpan perubahan</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="exit-modal">
+  <div class="modal">
+    <span class="close-x" id="exit-modal-close">&times;</span>
+    <h3>Jual sebagian / tutup posisi</h3>
+    <div class="remaining-badge" id="exit-remaining-info"></div>
+    <div class="field-row">
+      <div class="field"><label>Lot yang dijual</label><input type="number" id="exit-lot"></div>
+      <div class="field"><label>Harga jual</label><input type="number" id="exit-price"></div>
+    </div>
+    <div class="field" style="margin-bottom:10px;"><label>Tanggal</label><input type="date" id="exit-date"></div>
+    <div class="field" style="margin-bottom:14px;"><label>Catatan (opsional)</label><input type="text" id="exit-note" placeholder="cth. TP1, trailing stop, dll"></div>
+    <div id="exit-err"></div>
+    <button class="btn" id="btn-save-exit">Simpan penjualan</button>
   </div>
 </div>
 
@@ -416,8 +432,7 @@ async function saveToJournal(){
       lot: currentCalc.maxLot,
       modal: currentCalc.modal,
       riskPct: currentCalc.riskPct,
-      status: 'open',
-      exitPrice: null,
+      exits: [],
       notes: '',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -441,34 +456,50 @@ function subscribeJournal(){
   });
 }
 
-function computePnl(e){
-  if(e.status === 'open') return null;
-  if(e.exitPrice) return e.lot * 100 * (e.exitPrice - e.entry);
-  if(e.status === 'tp') return e.lot * 100 * (e.tp - e.entry);
-  if(e.status === 'sl') return e.lot * 100 * (e.sl - e.entry);
-  return null;
+// Backward-compatible: data lama pakai {status, exitPrice}, data baru pakai {exits:[]}
+function getExits(e){
+  if(Array.isArray(e.exits)) return e.exits;
+  if(e.status && e.status !== 'open'){
+    let price = e.exitPrice || (e.status==='tp' ? e.tp : e.status==='sl' ? e.sl : e.entry);
+    return [{ id:'legacy', lot: e.lot, price, date: e.date, note: e.notes || '' }];
+  }
+  return [];
 }
+function remainingLot(e){
+  const sold = getExits(e).reduce((s,x)=>s+Number(x.lot), 0);
+  return Math.max(0, e.lot - sold);
+}
+function totalPnl(e){
+  const exits = getExits(e);
+  if(exits.length === 0) return null;
+  return exits.reduce((s,x)=> s + Number(x.lot)*100*(Number(x.price)-e.entry), 0);
+}
+function isFullyClosed(e){ return remainingLot(e) <= 0 && getExits(e).length > 0; }
 
 function renderStats(list){
   const statsBox = document.getElementById('journal-stats');
-  const closed = list.filter(e => e.status !== 'open');
-  if(closed.length === 0){
-    statsBox.innerHTML = `<div class="card"><p class="card-title">Statistik</p><div class="empty" style="padding:12px 0;">Belum ada trade yang closed (kena TP / kena SL / manual close).<br>Win rate akan muncul di sini setelah kamu update status trade-nya lewat tombol Edit.</div></div>`;
+  const closedTrades = list.filter(e => isFullyClosed(e));
+  const realizedAll = list.reduce((s,e) => {
+    const p = totalPnl(e);
+    return s + (p || 0);
+  }, 0);
+
+  if(closedTrades.length === 0){
+    statsBox.innerHTML = `<div class="card"><p class="card-title">Statistik</p><div class="empty" style="padding:12px 0;">Belum ada trade yang closed sepenuhnya.<br>Win rate akan muncul setelah lot dijual habis (bisa bertahap lewat "Jual sebagian").</div></div>`;
     return;
   }
-  const withPnl = closed.map(e => ({e, pnl: computePnl(e)})).filter(x => x.pnl !== null);
+  const withPnl = closedTrades.map(e => ({e, pnl: totalPnl(e)}));
   const wins = withPnl.filter(x => x.pnl > 0);
   const losses = withPnl.filter(x => x.pnl <= 0);
   const winRate = withPnl.length > 0 ? (wins.length / withPnl.length) * 100 : 0;
-  const totalPnl = withPnl.reduce((s,x)=>s+x.pnl, 0);
   const avgWin = wins.length > 0 ? wins.reduce((s,x)=>s+x.pnl,0)/wins.length : 0;
   const avgLoss = losses.length > 0 ? losses.reduce((s,x)=>s+x.pnl,0)/losses.length : 0;
   statsBox.innerHTML = `
     <div class="card">
-      <p class="card-title">Statistik (${withPnl.length} trade closed)</p>
+      <p class="card-title">Statistik (${withPnl.length} trade closed penuh)</p>
       <div class="stat-grid">
         <div class="stat"><div class="k">Win rate</div><div class="v ${winRate>=50?'pos':'neg'}">${winRate.toFixed(1)}%</div></div>
-        <div class="stat"><div class="k">Total P/L</div><div class="v ${totalPnl>=0?'pos':'neg'}">${totalPnl>=0?'+':''}${fmtRp(totalPnl)}</div></div>
+        <div class="stat"><div class="k">Total P/L terealisasi</div><div class="v ${realizedAll>=0?'pos':'neg'}">${realizedAll>=0?'+':''}${fmtRp(realizedAll)}</div></div>
         <div class="stat"><div class="k">Rata-rata profit (win)</div><div class="v pos">+${fmtRp(avgWin)}</div></div>
         <div class="stat"><div class="k">Rata-rata rugi (loss)</div><div class="v neg">${fmtRp(avgLoss)}</div></div>
       </div>
@@ -478,10 +509,12 @@ function renderStats(list){
 
 function exportCsv(list){
   if(list.length === 0){ alert('Belum ada data jurnal untuk di-export.'); return; }
-  const headers = ['Tanggal','Ticker','Entry','SL','TP','Lot','Modal','Risiko %','Status','Harga Exit','P/L','Catatan'];
+  const headers = ['Tanggal','Ticker','Entry','SL','TP','Lot Dibeli','Sisa Lot','Modal','Risiko %','Riwayat Exit','P/L Terealisasi','Catatan'];
   const rows = list.map(e => {
-    const pnl = computePnl(e);
-    return [e.date, e.ticker, e.entry, e.sl, e.tp, e.lot, e.modal, e.riskPct, e.status, e.exitPrice || '', pnl !== null ? Math.round(pnl) : '', (e.notes||'').replace(/"/g,'""')];
+    const pnl = totalPnl(e);
+    const exits = getExits(e);
+    const exitSummary = exits.map(x => `${x.lot} lot @${Math.round(x.price)} (${x.date}${x.note ? ', '+x.note : ''})`).join(' | ');
+    return [e.date, e.ticker, e.entry, e.sl, e.tp, e.lot, remainingLot(e), e.modal, e.riskPct, exitSummary, pnl !== null ? Math.round(pnl) : '', (e.notes||'').replace(/"/g,'""')];
   });
   const csvContent = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
   const blob = new Blob(['\uFEFF' + csvContent], {type:'text/csv;charset=utf-8;'});
@@ -504,11 +537,40 @@ function renderJournal(){
     return;
   }
   container.innerHTML = list.map(e => {
-    const statusLabel = {open:'Open', tp:'Kena TP', sl:'Kena SL', manual:'Manual'}[e.status] || 'Open';
-    const statusClass = {open:'status-open', tp:'status-tp', sl:'status-sl', manual:'status-manual'}[e.status] || 'status-open';
-    const pnl = computePnl(e);
+    const exits = getExits(e);
+    const remaining = remainingLot(e);
+    const pnl = totalPnl(e);
+    const fullyClosed = isFullyClosed(e);
+
+    let statusLabel, statusClass;
+    if(exits.length === 0){
+      statusLabel = 'Open'; statusClass = 'status-open';
+    } else if(!fullyClosed){
+      statusLabel = 'Partial'; statusClass = 'status-partial';
+    } else {
+      statusLabel = pnl >= 0 ? 'Closed - Profit' : 'Closed - Rugi';
+      statusClass = pnl >= 0 ? 'status-closed-win' : 'status-closed-loss';
+    }
+
     const slPct = ((e.sl - e.entry) / e.entry) * 100;
     const tpPct = ((e.tp - e.entry) / e.entry) * 100;
+
+    const exitListHtml = exits.length > 0 ? `
+      <div class="exit-list">
+        ${exits.map(x => {
+          const xPnl = Number(x.lot) * 100 * (Number(x.price) - e.entry);
+          return `
+          <div class="exit-row">
+            <span class="info">${x.lot} lot @${fmtNum(x.price)} &middot; ${x.date}${x.note ? ' &middot; '+x.note : ''}</span>
+            <span style="display:flex; align-items:center; gap:6px;">
+              <span class="pnl" style="color:${xPnl>=0?'var(--green)':'var(--red)'}">${xPnl>=0?'+':''}${fmtRp(xPnl)}</span>
+              ${x.id !== 'legacy' ? `<button data-action="delete-exit" data-id="${e.id}" data-exit-id="${x.id}" title="Hapus exit ini">&times;</button>` : ''}
+            </span>
+          </div>`;
+        }).join('')}
+      </div>
+    ` : '';
+
     return `
       <div class="j-entry">
         <div class="j-top">
@@ -519,11 +581,14 @@ function renderJournal(){
           <div><div class="k">Entry</div><div class="v">${fmtNum(e.entry)}</div></div>
           <div><div class="k">SL</div><div class="v" style="color:var(--red);">${fmtNum(e.sl)} <span style="font-size:10px;">(${slPct.toFixed(1)}%)</span></div></div>
           <div><div class="k">TP</div><div class="v" style="color:var(--green);">${fmtNum(e.tp)} <span style="font-size:10px;">(+${tpPct.toFixed(1)}%)</span></div></div>
-          <div><div class="k">Lot</div><div class="v">${fmtNum(e.lot)}</div></div>
+          <div><div class="k">Lot dibeli</div><div class="v">${fmtNum(e.lot)}</div></div>
         </div>
-        ${pnl !== null ? `<div style="font-size:12px; margin-bottom:10px;">P/L: <span style="font-family:var(--mono); font-weight:700; color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmtRp(pnl)}</span></div>` : ''}
+        <div class="remaining-badge">Sisa posisi: ${fmtNum(remaining)} lot dari ${fmtNum(e.lot)} lot</div>
+        ${exitListHtml}
+        ${pnl !== null ? `<div style="font-size:12px; margin-bottom:10px;">Total P/L terealisasi: <span style="font-family:var(--mono); font-weight:700; color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmtRp(pnl)}</span></div>` : ''}
         ${e.notes ? `<div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">${e.notes}</div>` : ''}
         <div class="j-actions">
+          ${remaining > 0 ? `<button data-action="sell" data-id="${e.id}">Jual sebagian</button>` : ''}
           <button data-action="edit" data-id="${e.id}">Edit</button>
           <button data-action="delete" data-id="${e.id}">Hapus</button>
         </div>
@@ -532,12 +597,26 @@ function renderJournal(){
   }).join('');
   container.querySelectorAll('[data-action="edit"]').forEach(b=> b.addEventListener('click', ()=> openEditModal(b.dataset.id)));
   container.querySelectorAll('[data-action="delete"]').forEach(b=> b.addEventListener('click', ()=> deleteEntry(b.dataset.id)));
+  container.querySelectorAll('[data-action="sell"]').forEach(b=> b.addEventListener('click', ()=> openExitModal(b.dataset.id)));
+  container.querySelectorAll('[data-action="delete-exit"]').forEach(b=> b.addEventListener('click', ()=> deleteExit(b.dataset.id, b.dataset.exitId)));
 }
 
 async function deleteEntry(id){
-  if(!confirm('Hapus entry ini dari jurnal?')) return;
+  if(!confirm('Hapus entry ini dari jurnal? Seluruh riwayat exit-nya juga akan terhapus.')) return;
   try{ await journalRef().doc(id).delete(); }
   catch(e){ alert('Gagal menghapus: ' + e.message); }
+}
+
+async function deleteExit(tradeId, exitId){
+  if(!confirm('Hapus catatan penjualan ini?')) return;
+  const trade = journalCache.find(x => x.id === tradeId);
+  if(!trade) return;
+  const newExits = getExits(trade).filter(x => x.id !== exitId);
+  try{
+    await journalRef().doc(tradeId).update({ exits: newExits });
+  }catch(e){
+    alert('Gagal menghapus: ' + e.message);
+  }
 }
 
 function openEditModal(id){
@@ -551,8 +630,6 @@ function openEditModal(id){
   document.getElementById('edit-lot').value = e.lot;
   document.getElementById('edit-modal').value = e.modal;
   document.getElementById('edit-risk').value = e.riskPct;
-  document.getElementById('edit-status').value = e.status;
-  document.getElementById('edit-exit').value = e.exitPrice || '';
   document.getElementById('edit-notes').value = e.notes || '';
   document.getElementById('edit-modal').classList.add('show');
 }
@@ -574,13 +651,69 @@ document.getElementById('btn-save-edit').addEventListener('click', async ()=>{
       lot: parseFloat(document.getElementById('edit-lot').value),
       modal: parseFloat(document.getElementById('edit-modal').value),
       riskPct: parseFloat(document.getElementById('edit-risk').value),
-      status: document.getElementById('edit-status').value,
-      exitPrice: document.getElementById('edit-exit').value ? parseFloat(document.getElementById('edit-exit').value) : null,
       notes: document.getElementById('edit-notes').value
     });
     document.getElementById('edit-modal').classList.remove('show');
   }catch(e){
     alert('Gagal menyimpan perubahan: ' + e.message);
+  }
+  btn.disabled = false;
+});
+
+// ---------- PARTIAL EXIT MODAL ----------
+let exitingTradeId = null;
+
+function openExitModal(id){
+  const e = journalCache.find(x => x.id === id);
+  if(!e) return;
+  exitingTradeId = id;
+  const remaining = remainingLot(e);
+  document.getElementById('exit-remaining-info').textContent = `Sisa posisi saat ini: ${fmtNum(remaining)} lot`;
+  document.getElementById('exit-lot').value = remaining;
+  document.getElementById('exit-lot').max = remaining;
+  document.getElementById('exit-price').value = '';
+  document.getElementById('exit-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('exit-note').value = '';
+  document.getElementById('exit-err').innerHTML = '';
+  document.getElementById('exit-modal').classList.add('show');
+}
+
+document.getElementById('exit-modal-close').addEventListener('click', ()=>{
+  document.getElementById('exit-modal').classList.remove('show');
+});
+
+document.getElementById('btn-save-exit').addEventListener('click', async ()=>{
+  const errBox = document.getElementById('exit-err');
+  errBox.innerHTML = '';
+  const trade = journalCache.find(x => x.id === exitingTradeId);
+  if(!trade) return;
+
+  const lot = parseFloat(document.getElementById('exit-lot').value);
+  const price = parseFloat(document.getElementById('exit-price').value);
+  const date = document.getElementById('exit-date').value;
+  const note = document.getElementById('exit-note').value.trim();
+  const remaining = remainingLot(trade);
+
+  const errors = [];
+  if(!lot || lot <= 0) errors.push('Lot yang dijual harus diisi dan lebih dari 0.');
+  if(lot > remaining) errors.push(`Lot yang dijual tidak boleh lebih dari sisa posisi (${fmtNum(remaining)} lot).`);
+  if(!price || price <= 0) errors.push('Harga jual harus diisi.');
+  if(!date) errors.push('Tanggal harus diisi.');
+
+  if(errors.length){
+    errBox.innerHTML = '<div class="err">' + errors.join('<br>') + '</div>';
+    return;
+  }
+
+  const btn = document.getElementById('btn-save-exit');
+  btn.disabled = true;
+  try{
+    const newExit = { id: 'exit_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), lot, price, date, note };
+    const updatedExits = [...getExits(trade), newExit];
+    await journalRef().doc(exitingTradeId).update({ exits: updatedExits });
+    document.getElementById('exit-modal').classList.remove('show');
+  }catch(e){
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
   }
   btn.disabled = false;
 });
