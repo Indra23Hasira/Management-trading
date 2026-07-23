@@ -220,6 +220,28 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="edit-div-modal">
+  <div class="modal">
+    <span class="close-x" id="edit-div-modal-close">&times;</span>
+    <h3>Edit simulasi dividen</h3>
+    <div class="field-row">
+      <div class="field"><label>Ticker</label><input type="text" id="edit-dv-ticker" style="text-transform:uppercase;"></div>
+      <div class="field"><label>Harga beli (Rp)</label><input type="number" id="edit-dv-price"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Modal (Rp)</label><input type="number" id="edit-dv-modal"></div>
+      <div class="field"><label>EPS dasar (Rp)</label><input type="number" id="edit-dv-eps" step="0.01"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Payout ratio (%)</label><input type="number" id="edit-dv-payout" step="1"></div>
+      <div class="field"><label>Growth EPS/tahun (%)</label><input type="number" id="edit-dv-growth" step="1"></div>
+    </div>
+    <div class="field" style="margin-bottom:14px;"><label>Jangka waktu (tahun)</label><input type="number" id="edit-dv-years" min="1" max="20"></div>
+    <div id="edit-dv-err"></div>
+    <button class="btn" id="btn-save-edit-div">Simpan perubahan</button>
+  </div>
+</div>
+
 <div class="modal-overlay" id="exit-modal">
   <div class="modal">
     <span class="close-x" id="exit-modal-close">&times;</span>
@@ -893,10 +915,12 @@ function renderDivSimList(){
       </div>
       <div style="font-size:12px; margin-bottom:10px;">Total dividen proyeksi: <span style="font-family:var(--mono); font-weight:700; color:var(--green);">${fmtRp(s.totalDividend)}</span></div>
       <div class="j-actions">
+        <button data-action="edit-div-sim" data-id="${s.id}">Edit</button>
         <button data-action="delete-div-sim" data-id="${s.id}">Hapus</button>
       </div>
     </div>
   `).join('');
+  container.querySelectorAll('[data-action="edit-div-sim"]').forEach(b => b.addEventListener('click', ()=> openEditDivSimModal(b.dataset.id)));
   container.querySelectorAll('[data-action="delete-div-sim"]').forEach(b => b.addEventListener('click', ()=> deleteDivSim(b.dataset.id)));
 }
 
@@ -905,6 +929,78 @@ async function deleteDivSim(id){
   try{ await divSimRef().doc(id).delete(); }
   catch(e){ alert('Gagal menghapus: ' + e.message); }
 }
+
+let editingDivSimId = null;
+
+function openEditDivSimModal(id){
+  const s = divSimCache.find(x => x.id === id);
+  if(!s) return;
+  editingDivSimId = id;
+  document.getElementById('edit-dv-ticker').value = s.ticker;
+  document.getElementById('edit-dv-price').value = s.price;
+  document.getElementById('edit-dv-modal').value = s.modal;
+  document.getElementById('edit-dv-eps').value = s.epsBase;
+  document.getElementById('edit-dv-payout').value = s.payout;
+  document.getElementById('edit-dv-growth').value = s.growth;
+  document.getElementById('edit-dv-years').value = s.years;
+  document.getElementById('edit-dv-err').innerHTML = '';
+  document.getElementById('edit-div-modal').classList.add('show');
+}
+
+document.getElementById('edit-div-modal-close').addEventListener('click', ()=>{
+  document.getElementById('edit-div-modal').classList.remove('show');
+});
+
+document.getElementById('btn-save-edit-div').addEventListener('click', async ()=>{
+  const errBox = document.getElementById('edit-dv-err');
+  errBox.innerHTML = '';
+  if(!editingDivSimId) return;
+
+  const ticker = document.getElementById('edit-dv-ticker').value.trim().toUpperCase() || '-';
+  const price = parseFloat(document.getElementById('edit-dv-price').value);
+  const modal = parseFloat(document.getElementById('edit-dv-modal').value);
+  const epsBase = parseFloat(document.getElementById('edit-dv-eps').value);
+  const payout = parseFloat(document.getElementById('edit-dv-payout').value);
+  const growth = parseFloat(document.getElementById('edit-dv-growth').value);
+  const years = parseInt(document.getElementById('edit-dv-years').value) || 5;
+
+  const errors = [];
+  if(!price || price <= 0) errors.push('Harga beli harus lebih dari 0.');
+  if(!modal || modal <= 0) errors.push('Modal harus lebih dari 0.');
+  if(!epsBase || epsBase <= 0) errors.push('EPS dasar harus lebih dari 0.');
+  if(!payout || payout <= 0 || payout > 100) errors.push('Payout ratio harus antara 0-100%.');
+  if(isNaN(growth)) errors.push('Growth harus diisi (boleh negatif).');
+  if(years < 1 || years > 20) errors.push('Jangka waktu harus antara 1-20 tahun.');
+  if(errors.length){
+    errBox.innerHTML = '<div class="err">' + errors.join('<br>') + '</div>';
+    return;
+  }
+
+  const lots = Math.floor(modal / price / 100);
+  const shares = lots * 100;
+  let cumulative = 0;
+  let lastYoc = 0;
+  for(let y=1; y<=years; y++){
+    const eps = epsBase * Math.pow(1 + growth/100, y);
+    const dps = eps * (payout/100);
+    cumulative += dps * shares;
+    lastYoc = (dps / price) * 100;
+  }
+
+  const btn = document.getElementById('btn-save-edit-div');
+  btn.disabled = true;
+  try{
+    await divSimRef().doc(editingDivSimId).update({
+      ticker, price, modal, epsBase, payout, growth, years,
+      totalDividend: cumulative,
+      finalYoc: lastYoc
+    });
+    document.getElementById('edit-div-modal').classList.remove('show');
+  }catch(e){
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+  }
+  btn.disabled = false;
+});
 
 document.getElementById('btn-save-exit').addEventListener('click', async ()=>{
   const errBox = document.getElementById('exit-err');
