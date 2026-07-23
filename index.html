@@ -137,6 +137,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="calc">Kalkulator</div>
     <div class="tab" data-tab="journal">Jurnal Trading</div>
+    <div class="tab" data-tab="dividen">Simulasi Dividen</div>
   </div>
 
   <div class="panel active" id="panel-calc">
@@ -166,6 +167,36 @@
       <button class="btn secondary" id="btn-export-csv">Export CSV</button>
     </div>
     <div id="journal-list"></div>
+  </div>
+
+  <div class="panel" id="panel-dividen">
+    <div class="card">
+      <p class="card-title">Parameter saham & asumsi</p>
+      <div class="field-row">
+        <div class="field"><label>Ticker</label><input type="text" id="dv-ticker" value="ELSA" style="text-transform:uppercase;"></div>
+        <div class="field"><label>Harga beli (Rp)</label><input type="number" id="dv-price" value="640" inputmode="numeric"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Modal investasi (Rp)</label><input type="number" id="dv-modal" value="50000000" inputmode="numeric"></div>
+        <div class="field"><label>Laba bersih dasar (Rp miliar)</label><input type="number" id="dv-income" value="718.4" step="0.1" inputmode="decimal"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Saham beredar (miliar lembar)</label><input type="number" id="dv-shares" value="7.3" step="0.1" inputmode="decimal"></div>
+        <div class="field"><label>Payout ratio (%)</label><input type="number" id="dv-payout" value="45" step="1" inputmode="decimal"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Growth laba/tahun (%)</label><input type="number" id="dv-growth" value="8" step="1" inputmode="decimal"></div>
+        <div class="field"><label>Jangka waktu (tahun)</label><input type="number" id="dv-years" value="5" min="1" max="20" inputmode="numeric"></div>
+      </div>
+      <button class="btn" id="btn-div-calc">Hitung proyeksi dividen</button>
+      <div id="dv-err-box"></div>
+    </div>
+    <div id="dv-result-box" style="display:none;"></div>
+
+    <div class="card">
+      <p class="card-title">Simulasi tersimpan</p>
+      <div id="dv-saved-list"></div>
+    </div>
   </div>
 </div>
 </div>
@@ -212,6 +243,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 
 <script>
 /* ============================================================
@@ -239,6 +271,10 @@ let currentCalc = null;
 let editingId = null;
 let unsubscribeJournal = null;
 let journalCache = [];
+let unsubscribeDivSim = null;
+let divSimCache = [];
+let divChart = null;
+let dvCurrentSim = null;
 
 function fmtRp(n){ return 'Rp' + Math.round(n).toLocaleString('id-ID'); }
 function fmtNum(n){ return Math.round(n).toLocaleString('id-ID'); }
@@ -252,11 +288,13 @@ auth.onAuthStateChanged(user => {
     document.getElementById('app-screen').style.display = 'block';
     document.getElementById('user-email').textContent = user.email;
     subscribeJournal();
+    subscribeDivSims();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
     document.getElementById('auth-screen').style.display = 'block';
     if(unsubscribeJournal){ unsubscribeJournal(); unsubscribeJournal = null; }
+    if(unsubscribeDivSim){ unsubscribeDivSim(); unsubscribeDivSim = null; }
   }
 });
 
@@ -681,6 +719,201 @@ function openExitModal(id){
 document.getElementById('exit-modal-close').addEventListener('click', ()=>{
   document.getElementById('exit-modal').classList.remove('show');
 });
+
+// ---------- DIVIDEND PROJECTION SIMULATION ----------
+document.getElementById('btn-div-calc').addEventListener('click', runDivCalc);
+
+function runDivCalc(){
+  const errBox = document.getElementById('dv-err-box');
+  const resultBox = document.getElementById('dv-result-box');
+  errBox.innerHTML = '';
+  resultBox.style.display = 'none';
+
+  const ticker = document.getElementById('dv-ticker').value.trim().toUpperCase() || '-';
+  const price = parseFloat(document.getElementById('dv-price').value);
+  const modal = parseFloat(document.getElementById('dv-modal').value);
+  const incomeB = parseFloat(document.getElementById('dv-income').value);
+  const sharesB = parseFloat(document.getElementById('dv-shares').value);
+  const payout = parseFloat(document.getElementById('dv-payout').value);
+  const growth = parseFloat(document.getElementById('dv-growth').value);
+  const years = parseInt(document.getElementById('dv-years').value) || 5;
+
+  const errors = [];
+  if(!price || price <= 0) errors.push('Harga beli harus diisi dan lebih dari 0.');
+  if(!modal || modal <= 0) errors.push('Modal investasi harus diisi dan lebih dari 0.');
+  if(!incomeB || incomeB <= 0) errors.push('Laba bersih dasar harus diisi dan lebih dari 0.');
+  if(!sharesB || sharesB <= 0) errors.push('Jumlah saham beredar harus diisi dan lebih dari 0.');
+  if(!payout || payout <= 0 || payout > 100) errors.push('Payout ratio harus antara 0-100%.');
+  if(isNaN(growth)) errors.push('Asumsi growth harus diisi (boleh negatif).');
+  if(years < 1 || years > 20) errors.push('Jangka waktu harus antara 1-20 tahun.');
+
+  if(errors.length){
+    errBox.innerHTML = '<div class="err">' + errors.join('<br>') + '</div>';
+    return;
+  }
+
+  const baseIncome = incomeB * 1e9;
+  const sharesOut = sharesB * 1e9;
+  const lots = Math.floor(modal / price / 100);
+  const shares = lots * 100;
+
+  if(lots <= 0){
+    resultBox.innerHTML = '<div class="card"><div class="err" style="margin-bottom:0;">Modal tidak cukup untuk membeli 1 lot pun di harga ini.</div></div>';
+    resultBox.style.display = 'block';
+    return;
+  }
+
+  const rows = [];
+  let cumulative = 0;
+  for(let y=1; y<=years; y++){
+    const netIncome = baseIncome * Math.pow(1 + growth/100, y);
+    const dividendPool = netIncome * (payout/100);
+    const dps = dividendPool / sharesOut;
+    const dividendReceived = dps * shares;
+    const yoc = (dps / price) * 100;
+    cumulative += dividendReceived;
+    rows.push({ y, netIncome, dps, dividendReceived, yoc, cumulative });
+  }
+
+  dvCurrentSim = { ticker, price, modal, incomeB, sharesB, payout, growth, years, lots, shares, rows, totalDividend: cumulative, finalYoc: rows[rows.length-1].yoc };
+  renderDivResult(dvCurrentSim);
+}
+
+function renderDivResult(sim){
+  const resultBox = document.getElementById('dv-result-box');
+  const rowsHtml = sim.rows.map(r => `
+    <div class="j-entry" style="padding:10px 14px;">
+      <div class="j-grid">
+        <div><div class="k">Tahun</div><div class="v">${r.y}</div></div>
+        <div><div class="k">DPS</div><div class="v">${fmtRp(r.dps)}</div></div>
+        <div><div class="k">Dividen diterima</div><div class="v pos">+${fmtRp(r.dividendReceived)}</div></div>
+        <div><div class="k">Yield on cost</div><div class="v">${r.yoc.toFixed(1)}%</div></div>
+      </div>
+    </div>
+  `).join('');
+
+  resultBox.innerHTML = `
+    <div class="card">
+      <div class="result-hero">
+        <div class="label">Total dividen ${sim.years} tahun &middot; ${sim.ticker}</div>
+        <div class="value">${fmtRp(sim.totalDividend)}</div>
+        <div class="sub">${fmtNum(sim.shares)} lembar &middot; entry ${fmtRp(sim.price)}</div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Yield on cost tahun ke-${sim.years}</div><div class="v pos">${sim.finalYoc.toFixed(1)}%</div></div>
+        <div class="stat"><div class="k">Jumlah lot</div><div class="v">${fmtNum(sim.lots)} lot</div></div>
+      </div>
+      <div style="position:relative; height:220px; margin:16px 0;">
+        <canvas id="dv-chart" role="img" aria-label="Grafik proyeksi dividen per saham dan yield on cost per tahun">Proyeksi DPS dan yield on cost</canvas>
+      </div>
+      ${rowsHtml}
+      <button class="btn secondary" id="btn-save-div-sim" style="margin-top:10px;">Simpan simulasi ini</button>
+    </div>
+  `;
+  resultBox.style.display = 'block';
+  document.getElementById('btn-save-div-sim').addEventListener('click', saveDivSim);
+  drawDivChart(sim);
+}
+
+function drawDivChart(sim){
+  const ctx = document.getElementById('dv-chart');
+  if(!ctx) return;
+  if(divChart) divChart.destroy();
+  divChart = new Chart(ctx, {
+    data: {
+      labels: sim.rows.map(r => 'Thn ' + r.y),
+      datasets: [
+        { type:'bar', label:'DPS (Rp)', data: sim.rows.map(r=>Math.round(r.dps)), backgroundColor:'#00D68F', yAxisID:'y' },
+        { type:'line', label:'Yield on cost (%)', data: sim.rows.map(r=>Math.round(r.yoc*10)/10), borderColor:'#4EA1FF', backgroundColor:'#4EA1FF', yAxisID:'y1', tension:0.3 }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        y:{ position:'left', ticks:{color:'#8B9AAA'}, grid:{color:'#26333F'} },
+        y1:{ position:'right', ticks:{color:'#8B9AAA'}, grid:{drawOnChartArea:false} },
+        x:{ ticks:{color:'#8B9AAA'}, grid:{display:false} }
+      },
+      plugins:{ legend:{ labels:{ color:'#8B9AAA' } } }
+    }
+  });
+}
+
+// ---------- FIRESTORE DIVIDEND SIMULATIONS ----------
+function divSimRef(){
+  return db.collection('users').doc(currentUser.uid).collection('dividend_sims');
+}
+
+async function saveDivSim(){
+  if(!dvCurrentSim || !currentUser) return;
+  const btn = document.getElementById('btn-save-div-sim');
+  btn.disabled = true;
+  try{
+    await divSimRef().add({
+      date: new Date().toISOString().slice(0,10),
+      ticker: dvCurrentSim.ticker,
+      price: dvCurrentSim.price,
+      modal: dvCurrentSim.modal,
+      incomeB: dvCurrentSim.incomeB,
+      sharesB: dvCurrentSim.sharesB,
+      payout: dvCurrentSim.payout,
+      growth: dvCurrentSim.growth,
+      years: dvCurrentSim.years,
+      totalDividend: dvCurrentSim.totalDividend,
+      finalYoc: dvCurrentSim.finalYoc,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    btn.textContent = 'Tersimpan ke jurnal ✓';
+    setTimeout(()=>{ btn.textContent = 'Simpan simulasi ini'; btn.disabled = false; }, 2000);
+  }catch(e){
+    alert('Gagal menyimpan simulasi: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function subscribeDivSims(){
+  if(unsubscribeDivSim) unsubscribeDivSim();
+  unsubscribeDivSim = divSimRef().orderBy('createdAt', 'desc').onSnapshot(snap => {
+    divSimCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderDivSimList();
+  }, err => {
+    console.error(err);
+    document.getElementById('dv-saved-list').innerHTML = '<div class="err">Gagal memuat simulasi: ' + err.message + '</div>';
+  });
+}
+
+function renderDivSimList(){
+  const container = document.getElementById('dv-saved-list');
+  if(divSimCache.length === 0){
+    container.innerHTML = '<div class="empty">Belum ada simulasi tersimpan.<br>Hitung proyeksi lalu klik "Simpan simulasi ini".</div>';
+    return;
+  }
+  container.innerHTML = divSimCache.map(s => `
+    <div class="j-entry">
+      <div class="j-top">
+        <div><span class="j-ticker">${s.ticker}</span><span class="j-date" style="margin-left:8px;">${s.date}</span></div>
+        <span class="j-status status-manual">${s.years} thn</span>
+      </div>
+      <div class="j-grid">
+        <div><div class="k">Entry</div><div class="v">${fmtRp(s.price)}</div></div>
+        <div><div class="k">Growth</div><div class="v">${s.growth}%</div></div>
+        <div><div class="k">Payout</div><div class="v">${s.payout}%</div></div>
+        <div><div class="k">Yield thn-${s.years}</div><div class="v pos">${Number(s.finalYoc).toFixed(1)}%</div></div>
+      </div>
+      <div style="font-size:12px; margin-bottom:10px;">Total dividen proyeksi: <span style="font-family:var(--mono); font-weight:700; color:var(--green);">${fmtRp(s.totalDividend)}</span></div>
+      <div class="j-actions">
+        <button data-action="delete-div-sim" data-id="${s.id}">Hapus</button>
+      </div>
+    </div>
+  `).join('');
+  container.querySelectorAll('[data-action="delete-div-sim"]').forEach(b => b.addEventListener('click', ()=> deleteDivSim(b.dataset.id)));
+}
+
+async function deleteDivSim(id){
+  if(!confirm('Hapus simulasi ini?')) return;
+  try{ await divSimRef().doc(id).delete(); }
+  catch(e){ alert('Gagal menghapus: ' + e.message); }
+}
 
 document.getElementById('btn-save-exit').addEventListener('click', async ()=>{
   const errBox = document.getElementById('exit-err');
