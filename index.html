@@ -178,16 +178,13 @@
       </div>
       <div class="field-row">
         <div class="field"><label>Modal investasi (Rp)</label><input type="number" id="dv-modal" value="50000000" inputmode="numeric"></div>
-        <div class="field"><label>Laba bersih dasar (Rp miliar)</label><input type="number" id="dv-income" value="718.4" step="0.1" inputmode="decimal"></div>
+        <div class="field"><label>EPS dasar (Rp/saham)</label><input type="number" id="dv-eps" value="98.26" step="0.01" inputmode="decimal"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Saham beredar (miliar lembar)</label><input type="number" id="dv-shares" value="7.3" step="0.1" inputmode="decimal"></div>
         <div class="field"><label>Payout ratio (%)</label><input type="number" id="dv-payout" value="45" step="1" inputmode="decimal"></div>
+        <div class="field"><label>Growth EPS/tahun (%)</label><input type="number" id="dv-growth" value="8" step="1" inputmode="decimal"></div>
       </div>
-      <div class="field-row">
-        <div class="field"><label>Growth laba/tahun (%)</label><input type="number" id="dv-growth" value="8" step="1" inputmode="decimal"></div>
-        <div class="field"><label>Jangka waktu (tahun)</label><input type="number" id="dv-years" value="5" min="1" max="20" inputmode="numeric"></div>
-      </div>
+      <div class="field" style="margin-bottom:12px;"><label>Jangka waktu (tahun)</label><input type="number" id="dv-years" value="5" min="1" max="20" inputmode="numeric"></div>
       <button class="btn" id="btn-div-calc">Hitung proyeksi dividen</button>
       <div id="dv-err-box"></div>
     </div>
@@ -732,8 +729,7 @@ function runDivCalc(){
   const ticker = document.getElementById('dv-ticker').value.trim().toUpperCase() || '-';
   const price = parseFloat(document.getElementById('dv-price').value);
   const modal = parseFloat(document.getElementById('dv-modal').value);
-  const incomeB = parseFloat(document.getElementById('dv-income').value);
-  const sharesB = parseFloat(document.getElementById('dv-shares').value);
+  const epsBase = parseFloat(document.getElementById('dv-eps').value);
   const payout = parseFloat(document.getElementById('dv-payout').value);
   const growth = parseFloat(document.getElementById('dv-growth').value);
   const years = parseInt(document.getElementById('dv-years').value) || 5;
@@ -741,8 +737,7 @@ function runDivCalc(){
   const errors = [];
   if(!price || price <= 0) errors.push('Harga beli harus diisi dan lebih dari 0.');
   if(!modal || modal <= 0) errors.push('Modal investasi harus diisi dan lebih dari 0.');
-  if(!incomeB || incomeB <= 0) errors.push('Laba bersih dasar harus diisi dan lebih dari 0.');
-  if(!sharesB || sharesB <= 0) errors.push('Jumlah saham beredar harus diisi dan lebih dari 0.');
+  if(!epsBase || epsBase <= 0) errors.push('EPS dasar harus diisi dan lebih dari 0.');
   if(!payout || payout <= 0 || payout > 100) errors.push('Payout ratio harus antara 0-100%.');
   if(isNaN(growth)) errors.push('Asumsi growth harus diisi (boleh negatif).');
   if(years < 1 || years > 20) errors.push('Jangka waktu harus antara 1-20 tahun.');
@@ -752,8 +747,6 @@ function runDivCalc(){
     return;
   }
 
-  const baseIncome = incomeB * 1e9;
-  const sharesOut = sharesB * 1e9;
   const lots = Math.floor(modal / price / 100);
   const shares = lots * 100;
 
@@ -766,16 +759,15 @@ function runDivCalc(){
   const rows = [];
   let cumulative = 0;
   for(let y=1; y<=years; y++){
-    const netIncome = baseIncome * Math.pow(1 + growth/100, y);
-    const dividendPool = netIncome * (payout/100);
-    const dps = dividendPool / sharesOut;
+    const eps = epsBase * Math.pow(1 + growth/100, y);
+    const dps = eps * (payout/100);
     const dividendReceived = dps * shares;
     const yoc = (dps / price) * 100;
     cumulative += dividendReceived;
-    rows.push({ y, netIncome, dps, dividendReceived, yoc, cumulative });
+    rows.push({ y, eps, dps, dividendReceived, yoc, cumulative });
   }
 
-  dvCurrentSim = { ticker, price, modal, incomeB, sharesB, payout, growth, years, lots, shares, rows, totalDividend: cumulative, finalYoc: rows[rows.length-1].yoc };
+  dvCurrentSim = { ticker, price, modal, epsBase, payout, growth, years, lots, shares, rows, totalDividend: cumulative, finalYoc: rows[rows.length-1].yoc };
   renderDivResult(dvCurrentSim);
 }
 
@@ -854,8 +846,7 @@ async function saveDivSim(){
       ticker: dvCurrentSim.ticker,
       price: dvCurrentSim.price,
       modal: dvCurrentSim.modal,
-      incomeB: dvCurrentSim.incomeB,
-      sharesB: dvCurrentSim.sharesB,
+      epsBase: dvCurrentSim.epsBase,
       payout: dvCurrentSim.payout,
       growth: dvCurrentSim.growth,
       years: dvCurrentSim.years,
