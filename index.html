@@ -145,6 +145,7 @@
     <div class="tab active" data-tab="calc">Kalkulator</div>
     <div class="tab" data-tab="journal">Jurnal Trading</div>
     <div class="tab" data-tab="dividen">Simulasi Dividen</div>
+    <div class="tab" data-tab="sizing">Batas Posisi</div>
   </div>
 
   <div class="panel active" id="panel-calc">
@@ -152,16 +153,28 @@
       <p class="card-title">Rencana trade</p>
       <div class="field-row">
         <div class="field"><label>Ticker</label><input type="text" id="in-ticker" placeholder="cth. AMMN" style="text-transform:uppercase;"></div>
+        <div class="field"><label>Kategori</label>
+          <select id="in-kategori">
+            <option value="blue">Blue Chip</option>
+            <option value="menengah" selected>Menengah / Wajar</option>
+            <option value="komoditas">Komoditas / Siklikal</option>
+            <option value="spekulatif">Spekulatif</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
         <div class="field"><label>Modal (Rp)</label><input type="number" id="in-modal" placeholder="10000000" inputmode="numeric"></div>
-      </div>
-      <div class="field-row">
         <div class="field"><label>Entry (Rp)</label><input type="number" id="in-entry" placeholder="1540" inputmode="numeric"></div>
-        <div class="field"><label>Stop loss (Rp)</label><input type="number" id="in-sl" placeholder="1450" inputmode="numeric"></div>
       </div>
       <div class="field-row">
+        <div class="field"><label>Stop loss (Rp)</label><input type="number" id="in-sl" placeholder="1450" inputmode="numeric"></div>
         <div class="field"><label>Take profit (Rp)</label><input type="number" id="in-tp" placeholder="1675" inputmode="numeric"></div>
-        <div class="field"><label>Risiko (%)</label><input type="number" id="in-risk" placeholder="1" step="0.1" inputmode="decimal"></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label>Risiko (%)</label><input type="number" id="in-risk" placeholder="1" step="0.1" inputmode="decimal"></div>
+        <div class="field"></div>
+      </div>
+      <div id="sizing-hint" style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"></div>
       <button class="btn" id="btn-calc">Hitung lot maksimal</button>
       <div id="err-box"></div>
     </div>
@@ -200,6 +213,45 @@
     <div class="card">
       <p class="card-title">Simulasi tersimpan</p>
       <div id="dv-saved-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-sizing">
+    <div class="card">
+      <p class="card-title">Modal aktif & batas per kategori</p>
+      <div class="field" style="margin-bottom:12px;"><label>Total modal aktif di market (Rp)</label><input type="number" id="sz-total-modal" placeholder="50000000" inputmode="numeric"></div>
+      <div class="field-row">
+        <div class="field"><label>Maks. Blue Chip (%)</label><input type="number" id="sz-limit-blue" step="0.5" inputmode="decimal"></div>
+        <div class="field"><label>Maks. Menengah/Wajar (%)</label><input type="number" id="sz-limit-menengah" step="0.5" inputmode="decimal"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Maks. Komoditas/Siklikal (%)</label><input type="number" id="sz-limit-komoditas" step="0.5" inputmode="decimal"></div>
+        <div class="field"><label>Maks. Spekulatif (%)</label><input type="number" id="sz-limit-spekulatif" step="0.5" inputmode="decimal"></div>
+      </div>
+      <button class="btn" id="btn-save-sizing">Simpan pengaturan</button>
+      <div id="sz-save-msg" style="font-size:12px; color:var(--green); margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Pemakaian jatah saat ini (posisi open/partial)</p>
+      <div id="sz-usage-list"></div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Cek kapasitas sebelum beli</p>
+      <div class="field-row">
+        <div class="field"><label>Kategori</label>
+          <select id="sz-check-kategori">
+            <option value="blue">Blue Chip</option>
+            <option value="menengah">Menengah / Wajar</option>
+            <option value="komoditas">Komoditas / Siklikal</option>
+            <option value="spekulatif">Spekulatif</option>
+          </select>
+        </div>
+        <div class="field"><label>Rencana harga entry (Rp)</label><input type="number" id="sz-check-price" placeholder="1500" inputmode="numeric"></div>
+      </div>
+      <button class="btn secondary" id="btn-check-capacity">Hitung sisa kapasitas</button>
+      <div id="sz-check-result"></div>
     </div>
   </div>
 </div>
@@ -301,6 +353,15 @@ let unsubscribeDivSim = null;
 let divSimCache = [];
 let divChart = null;
 let dvCurrentSim = null;
+let unsubscribeSizing = null;
+let sizingSettings = { totalModal: 0, limits: { blue: 10, menengah: 7, komoditas: 7, spekulatif: 5 } };
+
+const SIZING_CATS = [
+  { key:'blue', label:'Blue Chip' },
+  { key:'menengah', label:'Menengah / Wajar' },
+  { key:'komoditas', label:'Komoditas / Siklikal' },
+  { key:'spekulatif', label:'Spekulatif' }
+];
 
 function fmtRp(n){ return 'Rp' + Math.round(n).toLocaleString('id-ID'); }
 function fmtNum(n){ return Math.round(n).toLocaleString('id-ID'); }
@@ -315,12 +376,14 @@ auth.onAuthStateChanged(user => {
     document.getElementById('user-email').textContent = user.email;
     subscribeJournal();
     subscribeDivSims();
+    subscribeSizing();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
     document.getElementById('auth-screen').style.display = 'block';
     if(unsubscribeJournal){ unsubscribeJournal(); unsubscribeJournal = null; }
     if(unsubscribeDivSim){ unsubscribeDivSim(); unsubscribeDivSim = null; }
+    if(unsubscribeSizing){ unsubscribeSizing(); unsubscribeSizing = null; }
   }
 });
 
@@ -388,6 +451,7 @@ function runCalc(){
   resultBox.style.display = 'none';
 
   const ticker = document.getElementById('in-ticker').value.trim().toUpperCase() || '-';
+  const kategori = document.getElementById('in-kategori').value;
   const modal = parseFloat(document.getElementById('in-modal').value);
   const entry = parseFloat(document.getElementById('in-entry').value);
   const sl = parseFloat(document.getElementById('in-sl').value);
@@ -423,7 +487,22 @@ function runCalc(){
   const potentialProfit = actualShares * (tp - entry);
   const rr = riskPerShare > 0 ? (tp - entry) / riskPerShare : 0;
 
-  currentCalc = { ticker, entry, sl, tp, modal, riskPct, maxLot, actualShares, actualRisk, actualRiskPct, positionValue, potentialProfit, rr };
+  currentCalc = { ticker, kategori, entry, sl, tp, modal, riskPct, maxLot, actualShares, actualRisk, actualRiskPct, positionValue, potentialProfit, rr };
+
+  const hintBox = document.getElementById('sizing-hint');
+  if(hintBox){
+    const usage = getCategoryUsage();
+    const catInfo = usage[kategori];
+    const limitRp = sizingSettings.totalModal * (sizingSettings.limits[kategori]/100);
+    if(sizingSettings.totalModal > 0 && catInfo){
+      const sisa = Math.max(0, limitRp - catInfo.used);
+      const overLimit = (catInfo.used + positionValue) > limitRp;
+      hintBox.innerHTML = `Jatah kategori <b>${SIZING_CATS.find(c=>c.key===kategori).label}</b>: terpakai ${fmtRp(catInfo.used)} dari ${fmtRp(limitRp)}. Sisa jatah ${fmtRp(sisa)}.` +
+        (overLimit ? ' <span style="color:var(--red)">Posisi ini akan melebihi batas kategori.</span>' : '');
+    } else {
+      hintBox.innerHTML = 'Atur total modal & batas kategori di tab "Batas Posisi" untuk melihat sisa jatah di sini.';
+    }
+  }
 
   let html = '';
   if(maxLot <= 0){
@@ -477,6 +556,123 @@ function runCalc(){
   document.getElementById('btn-save-journal').addEventListener('click', saveToJournal);
 }
 
+// ---------- SIZING (BATAS POSISI) ----------
+function sizingRef(){
+  return db.collection('users').doc(currentUser.uid).collection('meta').doc('sizing');
+}
+
+function subscribeSizing(){
+  if(unsubscribeSizing) unsubscribeSizing();
+  unsubscribeSizing = sizingRef().onSnapshot(doc => {
+    if(doc.exists){
+      const d = doc.data();
+      sizingSettings = {
+        totalModal: d.totalModal || 0,
+        limits: Object.assign({ blue:10, menengah:7, komoditas:7, spekulatif:5 }, d.limits || {})
+      };
+    }
+    document.getElementById('sz-total-modal').value = sizingSettings.totalModal || '';
+    document.getElementById('sz-limit-blue').value = sizingSettings.limits.blue;
+    document.getElementById('sz-limit-menengah').value = sizingSettings.limits.menengah;
+    document.getElementById('sz-limit-komoditas').value = sizingSettings.limits.komoditas;
+    document.getElementById('sz-limit-spekulatif').value = sizingSettings.limits.spekulatif;
+    renderSizingUsage();
+  }, err => console.error(err));
+}
+
+document.getElementById('btn-save-sizing').addEventListener('click', async ()=>{
+  const totalModal = parseFloat(document.getElementById('sz-total-modal').value) || 0;
+  const limits = {
+    blue: parseFloat(document.getElementById('sz-limit-blue').value) || 0,
+    menengah: parseFloat(document.getElementById('sz-limit-menengah').value) || 0,
+    komoditas: parseFloat(document.getElementById('sz-limit-komoditas').value) || 0,
+    spekulatif: parseFloat(document.getElementById('sz-limit-spekulatif').value) || 0
+  };
+  const msg = document.getElementById('sz-save-msg');
+  try{
+    await sizingRef().set({ totalModal, limits }, { merge:true });
+    msg.textContent = 'Tersimpan ✓';
+    setTimeout(()=> msg.textContent = '', 2000);
+  }catch(e){
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Gagal menyimpan: ' + e.message;
+  }
+});
+
+// Total Rp yang masih "terpakai" (mengunci modal) per kategori: posisi open/partial pakai sisa lot di harga entry
+function getCategoryUsage(){
+  const usage = {};
+  SIZING_CATS.forEach(c => usage[c.key] = { used: 0, count: 0 });
+  journalCache.forEach(e => {
+    const kategori = e.kategori || 'menengah';
+    if(!usage[kategori]) usage[kategori] = { used: 0, count: 0 };
+    const remaining = remainingLot(e);
+    if(remaining > 0){
+      usage[kategori].used += remaining * 100 * e.entry;
+      usage[kategori].count += 1;
+    }
+  });
+  return usage;
+}
+
+function renderSizingUsage(){
+  const box = document.getElementById('sz-usage-list');
+  if(!box) return;
+  const usage = getCategoryUsage();
+  const totalModal = sizingSettings.totalModal;
+  if(!totalModal || totalModal <= 0){
+    box.innerHTML = '<div class="empty">Isi total modal aktif di atas dulu untuk melihat pemakaian jatah.</div>';
+    return;
+  }
+  let totalUsedAll = 0;
+  box.innerHTML = SIZING_CATS.map(c => {
+    const u = usage[c.key] || { used:0, count:0 };
+    totalUsedAll += u.used;
+    const limitPct = sizingSettings.limits[c.key] || 0;
+    const limitRp = totalModal * (limitPct/100);
+    const pctOfLimit = limitRp > 0 ? Math.min(100, (u.used/limitRp)*100) : 0;
+    const barColor = pctOfLimit >= 100 ? 'var(--red)' : pctOfLimit >= 75 ? 'var(--amber)' : 'var(--green)';
+    return `
+      <div style="margin-bottom:16px;">
+        <div class="gauge-label"><span>${c.label} (${u.count} posisi)</span><span>${fmtRp(u.used)} / ${fmtRp(limitRp)}</span></div>
+        <div class="gauge-track"><div class="gauge-fill" style="width:${pctOfLimit}%; background:${barColor};"></div></div>
+      </div>
+    `;
+  }).join('') + `
+    <div class="stat-grid" style="margin-top:4px;">
+      <div class="stat"><div class="k">Total terpakai (semua kategori)</div><div class="v">${fmtRp(totalUsedAll)}</div></div>
+      <div class="stat"><div class="k">Sisa kas belum dipakai</div><div class="v ${(totalModal-totalUsedAll)>=0?'pos':'neg'}">${fmtRp(Math.max(0,totalModal-totalUsedAll))}</div></div>
+    </div>
+  `;
+}
+
+document.getElementById('btn-check-capacity').addEventListener('click', ()=>{
+  const resBox = document.getElementById('sz-check-result');
+  const kategori = document.getElementById('sz-check-kategori').value;
+  const price = parseFloat(document.getElementById('sz-check-price').value);
+  if(!sizingSettings.totalModal || sizingSettings.totalModal <= 0){
+    resBox.innerHTML = '<div class="err">Isi dan simpan total modal aktif dulu.</div>';
+    return;
+  }
+  if(!price || price <= 0){
+    resBox.innerHTML = '<div class="err">Isi rencana harga entry dulu.</div>';
+    return;
+  }
+  const usage = getCategoryUsage();
+  const used = (usage[kategori] || {used:0}).used;
+  const limitRp = sizingSettings.totalModal * ((sizingSettings.limits[kategori]||0)/100);
+  const sisaRp = Math.max(0, limitRp - used);
+  const maxLot = Math.floor(sisaRp / price / 100);
+  const catLabel = SIZING_CATS.find(c=>c.key===kategori).label;
+  resBox.innerHTML = `
+    <div class="result-hero" style="margin-top:14px;">
+      <div class="label">Maksimal lot baru di kategori ${catLabel}</div>
+      <div class="value">${fmtNum(maxLot)} lot</div>
+      <div class="sub">Sisa jatah ${fmtRp(sisaRp)} dari batas ${fmtRp(limitRp)}</div>
+    </div>
+  `;
+});
+
 // ---------- FIRESTORE JOURNAL ----------
 function journalRef(){
   return db.collection('users').doc(currentUser.uid).collection('risk_trades');
@@ -490,6 +686,7 @@ async function saveToJournal(){
     await journalRef().add({
       date: new Date().toISOString().slice(0,10),
       ticker: currentCalc.ticker,
+      kategori: currentCalc.kategori || 'menengah',
       entry: currentCalc.entry,
       sl: currentCalc.sl,
       tp: currentCalc.tp,
@@ -514,6 +711,7 @@ function subscribeJournal(){
   unsubscribeJournal = journalRef().orderBy('createdAt', 'desc').onSnapshot(snap => {
     journalCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderJournal();
+    renderSizingUsage();
   }, err => {
     console.error(err);
     document.getElementById('journal-list').innerHTML = '<div class="err">Gagal memuat jurnal: ' + err.message + '</div>';
@@ -638,7 +836,7 @@ function renderJournal(){
     return `
       <div class="j-entry">
         <div class="j-top">
-          <div><span class="j-ticker">${e.ticker}</span><span class="j-date" style="margin-left:8px;">${e.date}</span></div>
+          <div><span class="j-ticker">${e.ticker}</span><span class="j-date" style="margin-left:8px;">${e.date}</span>${e.kategori ? `<span class="j-date" style="margin-left:8px;">&middot; ${(SIZING_CATS.find(c=>c.key===e.kategori)||{label:e.kategori}).label}</span>` : ''}</div>
           <span class="j-status ${statusClass}">${statusLabel}</span>
         </div>
         <div class="j-grid">
