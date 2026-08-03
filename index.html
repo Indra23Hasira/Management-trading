@@ -146,6 +146,7 @@
     <div class="tab" data-tab="journal">Jurnal Trading</div>
     <div class="tab" data-tab="dividen">Simulasi Dividen</div>
     <div class="tab" data-tab="sizing">Batas Posisi</div>
+    <div class="tab" data-tab="aturan">Aturan Keuangan</div>
   </div>
 
   <div class="panel active" id="panel-calc">
@@ -254,6 +255,37 @@
       <div id="sz-check-result"></div>
     </div>
   </div>
+
+  <div class="panel" id="panel-aturan">
+    <div class="card">
+      <p class="card-title">Data dasar (isi manual)</p>
+      <div class="field-row">
+        <div class="field"><label>Gaji bulanan (Rp)</label><input type="number" id="ak-gaji" placeholder="15000000" inputmode="numeric"></div>
+        <div class="field"><label>Pengeluaran bulanan (Rp)</label><input type="number" id="ak-pengeluaran" placeholder="7500000" inputmode="numeric"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Return investasi/tahun (%)</label><input type="number" id="ak-return" placeholder="12" step="0.1" inputmode="decimal"></div>
+        <div class="field"><label>Umur (tahun)</label><input type="number" id="ak-umur" placeholder="38" inputmode="numeric"></div>
+      </div>
+      <div class="field" style="margin-bottom:12px;"><label>Modal investasi aktif (Rp)</label><input type="number" id="ak-modal" placeholder="60000000" inputmode="numeric"></div>
+      <button class="btn" id="btn-save-aturan">Simpan & hitung</button>
+      <div id="ak-save-msg" style="font-size:12px; color:var(--green); margin-top:8px;"></div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Ringkasan anggaran & target</p>
+      <div id="ak-anggaran-result">
+        <div class="empty">Isi data dasar di atas lalu klik "Simpan & hitung".</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Aturan investasi</p>
+      <div id="ak-investasi-result">
+        <div class="empty">Isi data dasar di atas lalu klik "Simpan & hitung".</div>
+      </div>
+    </div>
+  </div>
 </div>
 </div>
 
@@ -355,6 +387,8 @@ let divChart = null;
 let dvCurrentSim = null;
 let unsubscribeSizing = null;
 let sizingSettings = { totalModal: 0, limits: { blue: 10, menengah: 7, komoditas: 7, spekulatif: 5 } };
+let unsubscribeAturan = null;
+let aturanSettings = { gaji: 0, pengeluaran: 0, returnPct: 0, umur: 0, modal: 0 };
 
 const SIZING_CATS = [
   { key:'blue', label:'Blue Chip' },
@@ -377,6 +411,7 @@ auth.onAuthStateChanged(user => {
     subscribeJournal();
     subscribeDivSims();
     subscribeSizing();
+    subscribeAturan();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
@@ -384,6 +419,7 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeJournal){ unsubscribeJournal(); unsubscribeJournal = null; }
     if(unsubscribeDivSim){ unsubscribeDivSim(); unsubscribeDivSim = null; }
     if(unsubscribeSizing){ unsubscribeSizing(); unsubscribeSizing = null; }
+    if(unsubscribeAturan){ unsubscribeAturan(); unsubscribeAturan = null; }
   }
 });
 
@@ -672,6 +708,120 @@ document.getElementById('btn-check-capacity').addEventListener('click', ()=>{
     </div>
   `;
 });
+
+// ---------- ATURAN KEUANGAN ----------
+function aturanRef(){
+  return db.collection('users').doc(currentUser.uid).collection('meta').doc('aturanKeuangan');
+}
+
+function subscribeAturan(){
+  if(unsubscribeAturan) unsubscribeAturan();
+  unsubscribeAturan = aturanRef().onSnapshot(doc => {
+    if(doc.exists){
+      const d = doc.data();
+      aturanSettings = {
+        gaji: d.gaji || 0,
+        pengeluaran: d.pengeluaran || 0,
+        returnPct: d.returnPct || 0,
+        umur: d.umur || 0,
+        modal: d.modal || 0
+      };
+    }
+    document.getElementById('ak-gaji').value = aturanSettings.gaji || '';
+    document.getElementById('ak-pengeluaran').value = aturanSettings.pengeluaran || '';
+    document.getElementById('ak-return').value = aturanSettings.returnPct || '';
+    document.getElementById('ak-umur').value = aturanSettings.umur || '';
+    document.getElementById('ak-modal').value = aturanSettings.modal || '';
+    renderAturan();
+  }, err => console.error(err));
+}
+
+document.getElementById('btn-save-aturan').addEventListener('click', async ()=>{
+  const gaji = parseFloat(document.getElementById('ak-gaji').value) || 0;
+  const pengeluaran = parseFloat(document.getElementById('ak-pengeluaran').value) || 0;
+  const returnPct = parseFloat(document.getElementById('ak-return').value) || 0;
+  const umur = parseFloat(document.getElementById('ak-umur').value) || 0;
+  const modal = parseFloat(document.getElementById('ak-modal').value) || 0;
+  aturanSettings = { gaji, pengeluaran, returnPct, umur, modal };
+  const msg = document.getElementById('ak-save-msg');
+  try{
+    await aturanRef().set(aturanSettings, { merge:true });
+    msg.textContent = 'Tersimpan ✓';
+    setTimeout(()=> msg.textContent = '', 2000);
+  }catch(e){
+    msg.style.color = 'var(--red)';
+    msg.textContent = 'Gagal menyimpan: ' + e.message;
+  }
+  renderAturan();
+});
+
+function akRow(label, value, note){
+  return `
+    <div style="display:flex; justify-content:space-between; align-items:baseline; padding:8px 0; border-bottom:1px dashed var(--border);">
+      <div>
+        <div style="font-size:13px;">${label}</div>
+        ${note ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${note}</div>` : ''}
+      </div>
+      <div style="font-family:var(--mono); font-weight:700; font-size:14px; white-space:nowrap; margin-left:12px;">${value}</div>
+    </div>
+  `;
+}
+
+function renderAturan(){
+  const anggaranBox = document.getElementById('ak-anggaran-result');
+  const investasiBox = document.getElementById('ak-investasi-result');
+  const { gaji, pengeluaran, returnPct, umur, modal } = aturanSettings;
+
+  if(!gaji || !pengeluaran){
+    anggaranBox.innerHTML = '<div class="empty">Isi minimal gaji dan pengeluaran bulanan.</div>';
+    investasiBox.innerHTML = '<div class="empty">Isi minimal gaji dan pengeluaran bulanan.</div>';
+    return;
+  }
+
+  const gajiTahunan = gaji * 12;
+  const totalDanaPensiun = pengeluaran * 300;
+  const biayaMax = gaji * 0.5;
+  const danaDarurat = pengeluaran * 12;
+  const investasiIdeal = gaji * 0.3;
+  const danaEntertainment = gaji * 0.2;
+  const maxCicilan = gaji * 0.3;
+  const hargaMaxMobil = gajiTahunan * 0.35;
+  const hargaMaxRumah = gajiTahunan * 3;
+  const alokasiGift = gaji * 0.1;
+
+  anggaranBox.innerHTML = `
+    ${akRow('Total dana agar bisa pensiun', fmtRp(totalDanaPensiun), 'Pengeluaran bulanan &times; 300')}
+    ${akRow('Biaya hidup maksimal', fmtRp(biayaMax), 'Gaji bulanan &times; 0,5')}
+    ${akRow('Dana darurat', fmtRp(danaDarurat), 'Pengeluaran bulanan &times; 12')}
+    ${akRow('Investasi', fmtRp(investasiIdeal), 'Gaji bulanan &times; 0,3')}
+    ${akRow('Dana maksimal hiburan', fmtRp(danaEntertainment), 'Gaji bulanan &times; 0,2')}
+    ${akRow('Maks. cicilan', fmtRp(maxCicilan), 'Gaji bulanan &times; 0,3')}
+    ${akRow('Harga maks. mobil', fmtRp(hargaMaxMobil), 'Gaji tahunan &times; 0,35')}
+    ${akRow('Harga maks. rumah', fmtRp(hargaMaxRumah), 'Gaji tahunan &times; 3')}
+    ${akRow('Alokasi gift / berbagi', fmtRp(alokasiGift), 'Gaji bulanan &times; 0,1')}
+  `;
+
+  let investasiHtml = '';
+  if(returnPct > 0){
+    const tahunDobel = 72 / returnPct;
+    investasiHtml += akRow('Waktu uang bisa dobel', tahunDobel.toFixed(1) + ' tahun', `Rule of 72: 72 &divide; ${returnPct}% return`);
+  } else {
+    investasiHtml += '<div class="empty" style="padding:12px 0;">Isi return investasi/tahun untuk menghitung waktu dobel modal.</div>';
+  }
+  if(umur > 0){
+    const maxHighRisk = Math.max(0, 100 - umur);
+    investasiHtml += akRow('Maks. % aset risiko tinggi', maxHighRisk.toFixed(0) + '%', `100 &minus; umur (${umur} tahun)`);
+  } else {
+    investasiHtml += '<div class="empty" style="padding:12px 0;">Isi umur untuk menghitung batas porsi aset risiko tinggi.</div>';
+  }
+  if(modal > 0){
+    const maxSpekulatif = modal * 0.05;
+    investasiHtml += akRow('Maks. modal di aset spekulatif', fmtRp(maxSpekulatif), 'Modal investasi aktif &times; 0,05 &middot; risiko sangat tinggi');
+  } else {
+    investasiHtml += '<div class="empty" style="padding:12px 0;">Isi modal investasi aktif untuk menghitung batas aset spekulatif.</div>';
+  }
+  investasiBox.innerHTML = investasiHtml;
+}
 
 // ---------- FIRESTORE JOURNAL ----------
 function journalRef(){
