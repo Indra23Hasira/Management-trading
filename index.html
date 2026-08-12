@@ -142,14 +142,56 @@
   </div>
 
   <div class="tabs">
-    <div class="tab active" data-tab="calc">Kalkulator</div>
+    <div class="tab active" data-tab="rencana">Rencana Entry</div>
+    <div class="tab" data-tab="calc">Kalkulator</div>
     <div class="tab" data-tab="journal">Jurnal Trading</div>
     <div class="tab" data-tab="dividen">Simulasi Dividen</div>
     <div class="tab" data-tab="sizing">Batas Posisi</div>
     <div class="tab" data-tab="aturan">Aturan Keuangan</div>
   </div>
 
-  <div class="panel active" id="panel-calc">
+  <div class="panel active" id="panel-rencana">
+    <div class="card">
+      <p class="card-title" id="rn-form-title">Rencana entry baru</p>
+      <div class="field-row">
+        <div class="field"><label>Ticker</label><input type="text" id="rn-ticker" placeholder="cth. AMMN" style="text-transform:uppercase;"></div>
+        <div class="field"><label>Kategori</label>
+          <select id="rn-kategori">
+            <option value="blue">Blue Chip</option>
+            <option value="menengah" selected>Menengah / Wajar</option>
+            <option value="komoditas">Komoditas / Siklikal</option>
+            <option value="spekulatif">Spekulatif</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Zona entry bawah (Rp)</label><input type="number" id="rn-zona-bawah" placeholder="6195" inputmode="numeric"></div>
+        <div class="field"><label>Zona entry atas (Rp)</label><input type="number" id="rn-zona-atas" placeholder="6246" inputmode="numeric"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Stop loss rencana (Rp)</label><input type="number" id="rn-sl" placeholder="6144" inputmode="numeric"></div>
+        <div class="field"><label>Take profit rencana (Rp)</label><input type="number" id="rn-tp" placeholder="6463" inputmode="numeric"></div>
+      </div>
+      <div class="field" style="margin-bottom:12px;"><label>Alasan analisa</label><input type="text" id="rn-alasan" placeholder="cth. Fib 0.5-0.618, regression channel lower band"></div>
+      <div class="field" style="margin-bottom:14px;"><label>Syarat konfirmasi (pisahkan pakai koma)</label><input type="text" id="rn-syarat" placeholder="cth. candle reversal, volume naik, RSI keluar oversold"></div>
+      <div class="btn-row">
+        <button class="btn" id="btn-save-rencana">Simpan rencana</button>
+        <button class="btn secondary" id="btn-cancel-edit-rencana" style="display:none;">Batal edit</button>
+      </div>
+      <div id="rn-err-box"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <p class="card-title" style="margin:0;">Daftar rencana</p>
+        <button class="btn secondary" id="btn-refresh-prices" style="width:auto; padding:6px 12px; font-size:12px;">Refresh harga</button>
+      </div>
+      <div id="rn-last-refresh" style="font-size:11px; color:var(--text-muted); font-family:var(--mono); margin-bottom:10px;"></div>
+      <div id="rencana-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-calc">
     <div class="card">
       <p class="card-title">Rencana trade</p>
       <div class="field-row">
@@ -389,6 +431,10 @@ let unsubscribeSizing = null;
 let sizingSettings = { totalModal: 0, limits: { blue: 10, menengah: 7, komoditas: 7, spekulatif: 5 } };
 let unsubscribeAturan = null;
 let aturanSettings = { gaji: 0, pengeluaran: 0, returnPct: 0, umur: 0, modal: 0 };
+let unsubscribeRencana = null;
+let rencanaCache = [];
+let editingRencanaId = null;
+let rencanaAutoRefreshDone = false;
 
 const SIZING_CATS = [
   { key:'blue', label:'Blue Chip' },
@@ -412,6 +458,7 @@ auth.onAuthStateChanged(user => {
     subscribeDivSims();
     subscribeSizing();
     subscribeAturan();
+    subscribeRencana();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
@@ -420,6 +467,8 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeDivSim){ unsubscribeDivSim(); unsubscribeDivSim = null; }
     if(unsubscribeSizing){ unsubscribeSizing(); unsubscribeSizing = null; }
     if(unsubscribeAturan){ unsubscribeAturan(); unsubscribeAturan = null; }
+    if(unsubscribeRencana){ unsubscribeRencana(); unsubscribeRencana = null; }
+    rencanaAutoRefreshDone = false;
   }
 });
 
@@ -590,6 +639,213 @@ function runCalc(){
   resultBox.innerHTML = html;
   resultBox.style.display = 'block';
   document.getElementById('btn-save-journal').addEventListener('click', saveToJournal);
+}
+
+// ---------- RENCANA ENTRY ----------
+function rencanaRef(){
+  return db.collection('users').doc(currentUser.uid).collection('entry_plans');
+}
+
+function subscribeRencana(){
+  if(unsubscribeRencana) unsubscribeRencana();
+  unsubscribeRencana = rencanaRef().orderBy('createdAt', 'desc').onSnapshot(snap => {
+    rencanaCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderRencanaList();
+    if(!rencanaAutoRefreshDone){
+      rencanaAutoRefreshDone = true;
+      refreshAllPrices();
+    }
+  }, err => console.error(err));
+}
+
+async function fetchYahooPrice(ticker){
+  const symbol = ticker.toUpperCase() + '.JK';
+  const target = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1d&interval=1d';
+  const proxies = [
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(target),
+    'https://corsproxy.io/?url=' + encodeURIComponent(target)
+  ];
+  for(const url of proxies){
+    try{
+      const res = await fetch(url);
+      if(!res.ok) continue;
+      const data = await res.json();
+      const price = data && data.chart && data.chart.result && data.chart.result[0]
+        && data.chart.result[0].meta && data.chart.result[0].meta.regularMarketPrice;
+      if(price) return price;
+    }catch(e){ continue; }
+  }
+  return null;
+}
+
+function computeRencanaStatus(plan, price){
+  if(plan.status === 'dieksekusi' || plan.status === 'batal') return plan.status;
+  if(price == null) return plan.status || 'menunggu';
+  if(price >= plan.zonaBawah && price <= plan.zonaAtas) return 'tercapai';
+  return 'menunggu';
+}
+
+async function refreshAllPrices(){
+  const btn = document.getElementById('btn-refresh-prices');
+  const active = rencanaCache.filter(p => p.status !== 'dieksekusi' && p.status !== 'batal');
+  if(active.length === 0) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'Mengambil harga...'; }
+  for(const plan of active){
+    const price = await fetchYahooPrice(plan.ticker);
+    const newStatus = computeRencanaStatus(plan, price);
+    const update = { lastChecked: Date.now() };
+    if(price != null) update.lastPrice = price;
+    if(newStatus !== plan.status) update.status = newStatus;
+    try{ await rencanaRef().doc(plan.id).update(update); }catch(e){ console.error(e); }
+  }
+  if(btn){ btn.disabled = false; btn.textContent = 'Refresh harga'; }
+  const info = document.getElementById('rn-last-refresh');
+  if(info) info.textContent = 'Terakhir dicek: ' + new Date().toLocaleString('id-ID');
+}
+
+document.getElementById('btn-refresh-prices').addEventListener('click', refreshAllPrices);
+
+document.getElementById('btn-save-rencana').addEventListener('click', async ()=>{
+  const errBox = document.getElementById('rn-err-box');
+  errBox.innerHTML = '';
+  const ticker = document.getElementById('rn-ticker').value.trim().toUpperCase();
+  const kategori = document.getElementById('rn-kategori').value;
+  const zonaBawah = parseFloat(document.getElementById('rn-zona-bawah').value);
+  const zonaAtas = parseFloat(document.getElementById('rn-zona-atas').value);
+  const sl = parseFloat(document.getElementById('rn-sl').value);
+  const tp = parseFloat(document.getElementById('rn-tp').value);
+  const alasan = document.getElementById('rn-alasan').value.trim();
+  const syarat = document.getElementById('rn-syarat').value.split(',').map(s=>s.trim()).filter(Boolean);
+
+  if(!ticker || isNaN(zonaBawah) || isNaN(zonaAtas)){
+    errBox.innerHTML = '<div class="err">Ticker dan zona entry (bawah & atas) wajib diisi.</div>';
+    return;
+  }
+  if(zonaBawah > zonaAtas){
+    errBox.innerHTML = '<div class="err">Zona bawah harus lebih kecil dari zona atas.</div>';
+    return;
+  }
+
+  const payload = { ticker, kategori, zonaBawah, zonaAtas, sl: isNaN(sl)?null:sl, tp: isNaN(tp)?null:tp, alasan, syarat };
+
+  try{
+    if(editingRencanaId){
+      await rencanaRef().doc(editingRencanaId).update(payload);
+      cancelEditRencana();
+    } else {
+      await rencanaRef().add(Object.assign({ status: 'menunggu', lastPrice: null, lastChecked: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() }, payload));
+      clearRencanaForm();
+    }
+    refreshAllPrices();
+  }catch(e){
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+  }
+});
+
+function clearRencanaForm(){
+  ['rn-ticker','rn-zona-bawah','rn-zona-atas','rn-sl','rn-tp','rn-alasan','rn-syarat'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('rn-kategori').value = 'menengah';
+}
+
+function cancelEditRencana(){
+  editingRencanaId = null;
+  clearRencanaForm();
+  document.getElementById('rn-form-title').textContent = 'Rencana entry baru';
+  document.getElementById('btn-save-rencana').textContent = 'Simpan rencana';
+  document.getElementById('btn-cancel-edit-rencana').style.display = 'none';
+}
+
+document.getElementById('btn-cancel-edit-rencana').addEventListener('click', cancelEditRencana);
+
+function editRencana(id){
+  const plan = rencanaCache.find(p => p.id === id);
+  if(!plan) return;
+  editingRencanaId = id;
+  document.getElementById('rn-ticker').value = plan.ticker;
+  document.getElementById('rn-kategori').value = plan.kategori || 'menengah';
+  document.getElementById('rn-zona-bawah').value = plan.zonaBawah;
+  document.getElementById('rn-zona-atas').value = plan.zonaAtas;
+  document.getElementById('rn-sl').value = plan.sl != null ? plan.sl : '';
+  document.getElementById('rn-tp').value = plan.tp != null ? plan.tp : '';
+  document.getElementById('rn-alasan').value = plan.alasan || '';
+  document.getElementById('rn-syarat').value = (plan.syarat || []).join(', ');
+  document.getElementById('rn-form-title').textContent = 'Edit rencana: ' + plan.ticker;
+  document.getElementById('btn-save-rencana').textContent = 'Simpan perubahan';
+  document.getElementById('btn-cancel-edit-rencana').style.display = '';
+  document.getElementById('panel-rencana').scrollIntoView({ behavior:'smooth' });
+}
+
+async function setRencanaStatus(id, status){
+  try{ await rencanaRef().doc(id).update({ status }); }catch(e){ console.error(e); }
+}
+
+async function deleteRencana(id){
+  if(!confirm('Hapus rencana ini?')) return;
+  try{ await rencanaRef().doc(id).delete(); }catch(e){ console.error(e); }
+}
+
+function eksekusiKeKalkulator(id){
+  const plan = rencanaCache.find(p => p.id === id);
+  if(!plan) return;
+  document.getElementById('in-ticker').value = plan.ticker;
+  document.getElementById('in-kategori').value = plan.kategori || 'menengah';
+  document.getElementById('in-entry').value = plan.lastPrice != null ? plan.lastPrice : plan.zonaAtas;
+  if(plan.sl != null) document.getElementById('in-sl').value = plan.sl;
+  if(plan.tp != null) document.getElementById('in-tp').value = plan.tp;
+  setRencanaStatus(id, 'dieksekusi');
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  document.querySelector('.tab[data-tab="calc"]').classList.add('active');
+  document.getElementById('panel-calc').classList.add('active');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+const RENCANA_STATUS_LABEL = {
+  menunggu: { label: 'Menunggu', cls: 'status-open' },
+  tercapai: { label: 'Di zona entry', cls: 'status-partial' },
+  dieksekusi: { label: 'Dieksekusi', cls: 'status-closed-win' },
+  batal: { label: 'Batal', cls: 'status-closed-loss' }
+};
+
+function renderRencanaList(){
+  const box = document.getElementById('rencana-list');
+  if(!box) return;
+  if(rencanaCache.length === 0){
+    box.innerHTML = '<div class="empty">Belum ada rencana entry. Isi form di atas untuk mulai — tentukan zona sebelum market gerak, biar gak entry karena FOMO.</div>';
+    return;
+  }
+  box.innerHTML = rencanaCache.map(plan => {
+    const st = RENCANA_STATUS_LABEL[plan.status] || RENCANA_STATUS_LABEL.menunggu;
+    const catLabel = (SIZING_CATS.find(c=>c.key===plan.kategori) || {label:plan.kategori}).label;
+    const priceInfo = plan.lastPrice != null
+      ? `Harga saat ini: <b>${fmtRp(plan.lastPrice)}</b>` + (plan.lastChecked ? ` <span style="color:var(--text-muted);">(cek ${new Date(plan.lastChecked).toLocaleString('id-ID')})</span>` : '')
+      : '<span style="color:var(--text-muted);">Harga belum dicek</span>';
+    const syaratHtml = (plan.syarat && plan.syarat.length)
+      ? '<ul style="margin:6px 0 0 18px; padding:0; font-size:13px; color:var(--text-muted);">' + plan.syarat.map(s=>`<li>${s}</li>`).join('') + '</ul>'
+      : '';
+    const showActionButtons = plan.status !== 'dieksekusi' && plan.status !== 'batal';
+    return `
+      <div class="card" style="margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
+          <div>
+            <div style="font-size:16px; font-weight:700;">${plan.ticker} <span style="font-weight:400; font-size:12px; color:var(--text-muted);">${catLabel}</span></div>
+            <div style="font-size:13px; margin-top:4px;">Zona entry: <b>${fmtRp(plan.zonaBawah)} – ${fmtRp(plan.zonaAtas)}</b></div>
+            ${plan.sl!=null || plan.tp!=null ? `<div style="font-size:13px; color:var(--text-muted);">${plan.sl!=null?('SL '+fmtRp(plan.sl)):''}${plan.sl!=null && plan.tp!=null?' · ':''}${plan.tp!=null?('TP '+fmtRp(plan.tp)):''}</div>` : ''}
+            <div style="font-size:13px; margin-top:6px;">${priceInfo}</div>
+            ${plan.alasan ? `<div style="font-size:13px; color:var(--text-muted); margin-top:6px;">${plan.alasan}</div>` : ''}
+            ${syaratHtml}
+          </div>
+          <span class="j-status ${st.cls}">${st.label}</span>
+        </div>
+        <div class="btn-row" style="margin-top:14px;">
+          ${showActionButtons ? `<button class="btn" style="width:auto; padding:6px 12px; font-size:12px;" onclick="eksekusiKeKalkulator('${plan.id}')">Eksekusi ke Kalkulator</button>` : ''}
+          ${showActionButtons ? `<button class="btn secondary" style="width:auto; padding:6px 12px; font-size:12px;" onclick="editRencana('${plan.id}')">Edit</button>` : ''}
+          ${showActionButtons ? `<button class="btn secondary" style="width:auto; padding:6px 12px; font-size:12px;" onclick="setRencanaStatus('${plan.id}','batal')">Batalkan</button>` : ''}
+          <button class="btn secondary" style="width:auto; padding:6px 12px; font-size:12px;" onclick="deleteRencana('${plan.id}')">Hapus</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 // ---------- SIZING (BATAS POSISI) ----------
