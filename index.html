@@ -496,23 +496,40 @@ async function fetchRadarSnapshot(ticker){
     const latestDate = metaSnap.docs[0].data().tradingDate;
 
     // 2. ambil harga close hari itu + data score/ATR/support (read-only)
-    const [priceSnap, rsSnap] = await Promise.all([
+    const [priceSnap, rsSnap, indSnap] = await Promise.all([
       radarDb.collection('dailySummary').doc(latestDate).collection('stocks').doc(ticker).get(),
-      radarDb.collection('tickerRollingStats').doc(ticker).get()
+      radarDb.collection('tickerRollingStats').doc(ticker).get(),
+      radarDb.collection('tickerIndicators').doc(ticker).get()
     ]);
 
     const price = priceSnap.exists ? priceSnap.data() : {};
     const rs = rsSnap.exists ? rsSnap.data() : {};
+    const ind = indSnap.exists ? indSnap.data() : {};
+
+    // Radar dashboard nampilin Score dengan ngitung on-the-fly dari 3 pilar
+    // (liquidityScore×33 + foreignScore×40 + technicalScore×27)/100 — bukan cuma
+    // baca field totalScore (yang null kalau merge Tahap 5 belum jalan/lengkap).
+    // Fallback ke cara yang sama biar konsisten sama yang keliatan di dashboard.
+    let totalScore = rs.totalScore ?? null;
+    const technicalScore = rs.technicalScore ?? ind.technicalScore ?? null;
+    if(totalScore == null && (technicalScore != null || rs.foreignScore != null || rs.liquidityScore != null)){
+      totalScore = Math.round(((rs.liquidityScore??0)*33 + (rs.foreignScore??0)*40 + (technicalScore??0)*27) / 100);
+    }
+
+    // sama kayak dashboard.html: fallback ke tickerIndicators kalau merge ke
+    // tickerRollingStats (Tahap 4b) belum sempat kepakai buat ticker ini
+    const atr14 = rs.atr14 ?? ind.atr14 ?? null;
+    const supportLevel = rs.supportLevel ?? ind.supportLevel ?? null;
 
     const snapshot = {
       ticker,
       date: latestDate,
       close: price.close ?? price.Penutupan ?? null,
-      atr14: rs.atr14 ?? null,
-      supportLevel: rs.supportLevel ?? null,
-      totalScore: rs.totalScore ?? null,
+      atr14,
+      supportLevel,
+      totalScore,
       matchCount: rs.matchCount ?? null,
-      found: priceSnap.exists || rsSnap.exists
+      found: priceSnap.exists || rsSnap.exists || indSnap.exists
     };
     radarSnapshotCache.set(ticker, snapshot);
     return snapshot;
