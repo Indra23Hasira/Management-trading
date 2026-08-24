@@ -222,13 +222,33 @@
       <div id="err-box"></div>
     </div>
     <div id="result-box" style="display:none;"></div>
+
+    <!-- ============================================================
+         PANEL BASIS EXIT DARI RADAR (opsional, read-only ke Radar)
+         Bantu isi field SL/TP di atas — kalkulator lot tetap sama.
+         ============================================================ -->
+    <div class="card">
+      <p class="card-title">🎯 Basis Exit dari Radar (opsional)</p>
+      <div id="radar-conn-badge" style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">⚪ Belum terhubung ke Radar</div>
+
+      <div id="radar-login-box" class="field-row" style="margin-bottom:10px;">
+        <div class="field"><label>Email Radar</label><input type="email" id="radar-login-email" placeholder="email akun Radar"></div>
+        <div class="field"><label>Password Radar</label><input type="password" id="radar-login-password" placeholder="password akun Radar"></div>
+      </div>
+
+      <button class="btn secondary" id="btn-fetch-radar" style="margin-bottom:12px;">Ambil data Radar buat ticker ini</button>
+      <div id="radar-snapshot-box"></div>
+      <div id="radar-basis-box"></div>
+    </div>
   </div>
 
   <div class="panel" id="panel-journal">
     <div id="journal-stats"></div>
     <div class="btn-row" style="margin-bottom:14px;">
       <button class="btn secondary" id="btn-export-csv">Export CSV</button>
+      <button class="btn secondary" id="btn-check-radar-alerts">🔍 Cek Sinyal Radar (posisi open)</button>
     </div>
+    <div id="radar-alerts-box"></div>
     <div id="journal-list"></div>
   </div>
 
@@ -417,6 +437,92 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+/* ============================================================
+   KONEKSI KEDUA — READ-ONLY KE PROJECT RADAR IDX
+   Tujuan: ambil Close/ATR14/Support/Score buat bantu isi SL/TP.
+   Ini app Firebase TERPISAH (named app 'radarApp'), login sendiri
+   pakai akun Radar yang sama. TIDAK PERNAH melakukan write ke sini.
+   ============================================================ */
+const radarFirebaseConfig = {
+  apiKey: "AIzaSyAlTrAo6MMXjuiiFxdIW58UeaEl4ErMtiI",
+  authDomain: "radar-idx-hasira.firebaseapp.com",
+  projectId: "radar-idx-hasira",
+  storageBucket: "radar-idx-hasira.firebasestorage.app",
+  messagingSenderId: "675342054884",
+  appId: "1:675342054884:web:cd557eacc3b1da649c03f1"
+};
+const radarApp = firebase.initializeApp(radarFirebaseConfig, 'radarApp');
+const radarAuth = radarApp.auth();
+const radarDb = radarApp.firestore();
+let radarReady = false;
+
+radarAuth.onAuthStateChanged(user => {
+  radarReady = !!user;
+  const badge = document.getElementById('radar-conn-badge');
+  if(badge) badge.textContent = radarReady ? '🟢 Terhubung ke Radar' : '⚪ Belum terhubung ke Radar';
+});
+
+async function ensureRadarLogin(){
+  if(radarReady) return true;
+  const email = document.getElementById('radar-login-email').value.trim();
+  const password = document.getElementById('radar-login-password').value;
+  if(!email || !password){
+    alert('Isi email & password akun Radar dulu (sekali aja, nanti diingat browser).');
+    return false;
+  }
+  try{
+    await radarAuth.signInWithEmailAndPassword(email, password);
+    return true;
+  }catch(e){
+    alert('Login ke Radar gagal: ' + translateAuthError(e.code));
+    return false;
+  }
+}
+
+// cache sederhana per ticker per sesi, biar gak fetch berulang-ulang
+const radarSnapshotCache = new Map();
+
+async function fetchRadarSnapshot(ticker){
+  if(!ticker) return null;
+  if(radarSnapshotCache.has(ticker)) return radarSnapshotCache.get(ticker);
+  const ok = await ensureRadarLogin();
+  if(!ok) return null;
+
+  try{
+    // 1. cari tanggal data terbaru dari meta doc dailySummary
+    const metaSnap = await radarDb.collection('dailySummary')
+      .orderBy('tradingDate', 'desc').limit(1).get();
+    if(metaSnap.empty) return null;
+    const latestDate = metaSnap.docs[0].data().tradingDate;
+
+    // 2. ambil harga close hari itu + data score/ATR/support (read-only)
+    const [priceSnap, rsSnap] = await Promise.all([
+      radarDb.collection('dailySummary').doc(latestDate).collection('stocks').doc(ticker).get(),
+      radarDb.collection('tickerRollingStats').doc(ticker).get()
+    ]);
+
+    const price = priceSnap.exists ? priceSnap.data() : {};
+    const rs = rsSnap.exists ? rsSnap.data() : {};
+
+    const snapshot = {
+      ticker,
+      date: latestDate,
+      close: price.close ?? price.Penutupan ?? null,
+      atr14: rs.atr14 ?? null,
+      supportLevel: rs.supportLevel ?? null,
+      totalScore: rs.totalScore ?? null,
+      matchCount: rs.matchCount ?? null,
+      found: priceSnap.exists || rsSnap.exists
+    };
+    radarSnapshotCache.set(ticker, snapshot);
+    return snapshot;
+  }catch(e){
+    console.error('Gagal fetch data Radar:', e);
+    alert('Gagal ambil data Radar: ' + e.message);
+    return null;
+  }
+}
+
 let isRegisterMode = false;
 let currentUser = null;
 let currentCalc = null;
@@ -525,6 +631,158 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.getElementById('panel-'+t.dataset.tab).classList.add('active');
   });
 });
+
+// ---------- BASIS EXIT DARI RADAR ----------
+let currentRadarSnapshot = null;
+window.__radarBasisUsed = null;
+
+document.getElementById('btn-fetch-radar').addEventListener('click', async () => {
+  const ticker = document.getElementById('in-ticker').value.trim().toUpperCase();
+  if(!ticker){ alert('Isi ticker dulu.'); return; }
+  const btn = document.getElementById('btn-fetch-radar');
+  btn.disabled = true; btn.textContent = 'Mengambil...';
+  const snap = await fetchRadarSnapshot(ticker);
+  btn.disabled = false; btn.textContent = 'Ambil data Radar buat ticker ini';
+  if(!snap) return;
+  currentRadarSnapshot = snap;
+  renderRadarSnapshotBox(snap);
+  renderRadarBasisSelectors(snap);
+});
+
+function renderRadarSnapshotBox(snap){
+  const box = document.getElementById('radar-snapshot-box');
+  if(!snap.found){
+    box.innerHTML = `<div class="warn">Ticker ${snap.ticker} tidak ketemu di data Radar (per ${snap.date}). Isi SL/TP manual seperti biasa.</div>`;
+    document.getElementById('radar-basis-box').innerHTML = '';
+    return;
+  }
+  box.innerHTML = `
+    <div class="stat-grid" style="margin-bottom:12px;">
+      <div class="stat"><div class="k">Close (${snap.date})</div><div class="v">${snap.close!=null?fmtNum(snap.close):'-'}</div></div>
+      <div class="stat"><div class="k">ATR14</div><div class="v">${snap.atr14!=null?fmtNum(snap.atr14):'-'}</div></div>
+      <div class="stat"><div class="k">Support (15D)</div><div class="v">${snap.supportLevel!=null?fmtNum(snap.supportLevel):'-'}</div></div>
+      <div class="stat"><div class="k">Score / Match</div><div class="v">${snap.totalScore??'-'} / ${snap.matchCount??'-'}</div></div>
+    </div>`;
+}
+
+function renderRadarBasisSelectors(snap){
+  const box = document.getElementById('radar-basis-box');
+  if(!snap.found){ box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div class="field-row">
+      <div class="field"><label>Basis SL</label>
+        <select id="sl-basis-type">
+          <option value="manual">Manual (isi sendiri di field SL)</option>
+          <option value="atr">ATR × N (di bawah entry)</option>
+          <option value="support">Support (auto dari Radar)</option>
+        </select>
+      </div>
+      <div class="field"><label>Basis TP</label>
+        <select id="tp-basis-type">
+          <option value="manual">Manual (isi sendiri di field TP)</option>
+          <option value="atr">ATR × N (di atas entry)</option>
+          <option value="percent">Fixed % dari entry</option>
+          <option value="resistance">Resistance (manual)</option>
+          <option value="rmultiple">Risk:Reward (R multiple)</option>
+        </select>
+      </div>
+    </div>
+    <div id="sl-basis-params"></div>
+    <div id="tp-basis-params"></div>
+    <button class="btn secondary" id="btn-apply-radar-basis" style="margin-top:4px;">Hitung & isi ke SL/TP</button>
+    <div id="radar-basis-result" style="font-size:12px; margin-top:10px;"></div>
+    <div class="field-row" style="margin-top:12px;">
+      <div class="field"><label>Threshold alert Score turun (poin)</label><input type="number" id="alert-score-drop" value="10"></div>
+      <div class="field"><label>Threshold alert Match di bawah</label><input type="number" id="alert-match-below" value="2"></div>
+    </div>`;
+
+  document.getElementById('sl-basis-type').addEventListener('change', renderSlParams);
+  document.getElementById('tp-basis-type').addEventListener('change', renderTpParams);
+  renderSlParams();
+  renderTpParams();
+  document.getElementById('btn-apply-radar-basis').addEventListener('click', () => applyRadarBasis(snap));
+
+  function renderSlParams(){
+    const type = document.getElementById('sl-basis-type').value;
+    const p = document.getElementById('sl-basis-params');
+    if(type === 'atr') p.innerHTML = `<div class="field" style="margin-bottom:12px;"><label>Multiplier N (SL = Entry − N×ATR14)</label><input type="number" id="sl-atr-n" placeholder="1.5" step="0.1"></div>`;
+    else if(type === 'support') p.innerHTML = `<div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">SL otomatis pakai Support (15D): <b>${snap.supportLevel!=null?fmtNum(snap.supportLevel):'tidak tersedia'}</b></div>`;
+    else p.innerHTML = '';
+  }
+  function renderTpParams(){
+    const type = document.getElementById('tp-basis-type').value;
+    const p = document.getElementById('tp-basis-params');
+    if(type === 'atr') p.innerHTML = `<div class="field" style="margin-bottom:12px;"><label>Multiplier N (TP = Entry + N×ATR14)</label><input type="number" id="tp-atr-n" placeholder="1.5" step="0.1"></div>`;
+    else if(type === 'percent') p.innerHTML = `<div class="field" style="margin-bottom:12px;"><label>Persen target (%) — isi manual sesuai baca chart/fibo</label><input type="number" id="tp-pct" placeholder="cth. 3 atau 5" step="0.1"></div>`;
+    else if(type === 'resistance') p.innerHTML = `<div class="field" style="margin-bottom:12px;"><label>Harga resistance (manual)</label><input type="number" id="tp-resistance" placeholder="harga resistance dari chart"></div>`;
+    else if(type === 'rmultiple') p.innerHTML = `<div class="field" style="margin-bottom:12px;"><label>Multiple R (TP = Entry + R×(Entry−SL))</label><input type="number" id="tp-r-multiple" placeholder="cth. 2 atau 3" step="0.1"></div><div style="font-size:11px; color:var(--text-muted); margin-bottom:12px;">Butuh SL udah keisi dulu (dari basis SL di atas, atau ketik manual di field SL).</div>`;
+    else p.innerHTML = '';
+  }
+}
+
+function applyRadarBasis(snap){
+  const resultBox = document.getElementById('radar-basis-result');
+  const entry = parseFloat(document.getElementById('in-entry').value);
+  if(!entry || entry <= 0){
+    resultBox.innerHTML = '<span style="color:var(--red)">Isi harga Entry dulu di atas sebelum hitung basis exit.</span>';
+    return;
+  }
+  const slType = document.getElementById('sl-basis-type').value;
+  const tpType = document.getElementById('tp-basis-type').value;
+  let slPrice = null, tpPrice = null;
+  const notes = [];
+
+  if(slType === 'atr'){
+    const n = parseFloat(document.getElementById('sl-atr-n').value);
+    if(snap.atr14 == null) notes.push('ATR14 tidak tersedia buat ticker ini.');
+    else if(!n || n<=0) notes.push('Isi multiplier N buat SL.');
+    else slPrice = Math.round(entry - n*snap.atr14);
+  } else if(slType === 'support'){
+    if(snap.supportLevel == null) notes.push('Support tidak tersedia buat ticker ini.');
+    else slPrice = Math.round(snap.supportLevel);
+  }
+
+  if(tpType === 'atr'){
+    const n = parseFloat(document.getElementById('tp-atr-n').value);
+    if(snap.atr14 == null) notes.push('ATR14 tidak tersedia buat ticker ini.');
+    else if(!n || n<=0) notes.push('Isi multiplier N buat TP.');
+    else tpPrice = Math.round(entry + n*snap.atr14);
+  } else if(tpType === 'percent'){
+    const pct = parseFloat(document.getElementById('tp-pct').value);
+    if(!pct || pct<=0) notes.push('Isi persen target buat TP.');
+    else tpPrice = Math.round(entry * (1 + pct/100));
+  } else if(tpType === 'resistance'){
+    const r = parseFloat(document.getElementById('tp-resistance').value);
+    if(!r || r<=0) notes.push('Isi harga resistance buat TP.');
+    else tpPrice = Math.round(r);
+  } else if(tpType === 'rmultiple'){
+    const rMult = parseFloat(document.getElementById('tp-r-multiple').value);
+    const slForR = slPrice ?? parseFloat(document.getElementById('in-sl').value);
+    if(!slForR || slForR <= 0 || slForR >= entry) notes.push('Butuh SL valid (di bawah entry) buat hitung R-multiple.');
+    else if(!rMult || rMult<=0) notes.push('Isi angka multiple R buat TP.');
+    else tpPrice = Math.round(entry + rMult*(entry - slForR));
+  }
+
+  let html = '';
+  if(slPrice != null) html += `SL disarankan: <b style="color:var(--red)">${fmtNum(slPrice)}</b><br>`;
+  if(tpPrice != null) html += `TP disarankan: <b style="color:var(--green)">${fmtNum(tpPrice)}</b><br>`;
+  if(notes.length) html += `<span style="color:var(--amber)">${notes.join(' ')}</span>`;
+  resultBox.innerHTML = html || '<span style="color:var(--text-muted)">Basis Manual dipilih — isi langsung di field SL/TP di atas.</span>';
+
+  if(slPrice != null) document.getElementById('in-sl').value = slPrice;
+  if(tpPrice != null) document.getElementById('in-tp').value = tpPrice;
+
+  window.__radarBasisUsed = {
+    ticker: snap.ticker,
+    sl: { type: slType, price: slPrice },
+    tp: { type: tpType, price: tpPrice },
+    alertConfig: {
+      scoreDropThreshold: parseFloat(document.getElementById('alert-score-drop').value) || 10,
+      matchCountThreshold: parseFloat(document.getElementById('alert-match-below').value) || 2
+    },
+    snapshot: snap
+  };
+}
 
 // ---------- CALCULATOR ----------
 document.getElementById('btn-calc').addEventListener('click', runCalc);
@@ -1089,6 +1347,11 @@ async function saveToJournal(){
   const btn = document.getElementById('btn-save-journal');
   btn.disabled = true;
   try{
+    // radarBasis cuma disertakan kalau tickernya masih sama dengan yang terakhir
+    // di-fetch dari Radar — biar gak nempel data basah dari ticker lain
+    const radarBasis = (window.__radarBasisUsed && window.__radarBasisUsed.ticker === currentCalc.ticker)
+      ? window.__radarBasisUsed : null;
+
     await journalRef().add({
       date: new Date().toISOString().slice(0,10),
       ticker: currentCalc.ticker,
@@ -1101,6 +1364,7 @@ async function saveToJournal(){
       riskPct: currentCalc.riskPct,
       exits: [],
       notes: '',
+      radarBasis: radarBasis,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     btn.textContent = 'Tersimpan ke jurnal ✓';
@@ -1110,6 +1374,43 @@ async function saveToJournal(){
     alert('Gagal menyimpan ke jurnal: ' + e.message);
     btn.disabled = false;
   }
+}
+
+// ---------- ALERT SINYAL RADAR (basis #5, cuma alert bukan harga) ----------
+document.getElementById('btn-check-radar-alerts').addEventListener('click', checkRadarAlerts);
+
+async function checkRadarAlerts(){
+  const btn = document.getElementById('btn-check-radar-alerts');
+  const box = document.getElementById('radar-alerts-box');
+  const openTrades = journalCache.filter(e => !isFullyClosed(e) && e.radarBasis && e.radarBasis.snapshot);
+  if(openTrades.length === 0){
+    box.innerHTML = '<div class="warn">Gak ada posisi open yang punya data snapshot Radar (cuma trade yang dientry lewat "Basis Exit dari Radar" yang bisa dicek).</div>';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Mengecek...';
+  const rows = [];
+  for(const e of openTrades){
+    const cur = await fetchRadarSnapshot(e.ticker);
+    if(!cur || !cur.found) continue;
+    const entrySnap = e.radarBasis.snapshot;
+    const cfg = e.radarBasis.alertConfig || { scoreDropThreshold: 10, matchCountThreshold: 2 };
+    const scoreDrop = (entrySnap.totalScore != null && cur.totalScore != null) ? entrySnap.totalScore - cur.totalScore : null;
+    const matchLow = (cur.matchCount != null) ? cur.matchCount < cfg.matchCountThreshold : false;
+    const triggered = (scoreDrop != null && scoreDrop >= cfg.scoreDropThreshold) || matchLow;
+    rows.push({ ticker: e.ticker, entrySnap, cur, scoreDrop, matchLow, triggered });
+  }
+  btn.disabled = false; btn.textContent = '🔍 Cek Sinyal Radar (posisi open)';
+
+  const alerts = rows.filter(r => r.triggered);
+  const rest = rows.filter(r => !r.triggered);
+  let html = '';
+  if(alerts.length){
+    html += alerts.map(r => `<div class="warn" style="margin-bottom:8px;">⚠ <b>${r.ticker}</b> — Score ${r.entrySnap.totalScore??'-'} → ${r.cur.totalScore??'-'}${r.scoreDrop!=null?` (turun ${r.scoreDrop})`:''}, Match ${r.cur.matchCount??'-'}/4. Pertimbangkan review posisi.</div>`).join('');
+  }
+  if(rest.length){
+    html += `<div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Aman: ${rest.map(r=>r.ticker).join(', ')}</div>`;
+  }
+  box.innerHTML = html || '<div class="warn">Gak ada data yang bisa dicek (ticker mungkin tidak ada lagi di Radar hari ini).</div>';
 }
 
 function subscribeJournal(){
