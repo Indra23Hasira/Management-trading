@@ -2106,6 +2106,35 @@ function findSwingPoints(candles, window=3){
   return { lows, highs };
 }
 
+function percentile(sortedAsc, p){
+  const idx = Math.floor((sortedAsc.length-1) * p);
+  return sortedAsc[idx];
+}
+
+// Cari support terdekat: coba swing point dulu (window makin longgar), fallback ke percentile kalau saham sideways/kurang jelas swing-nya
+function computeSupportLevel(candles, currentPrice){
+  for(const w of [3, 2, 1]){
+    const { lows } = findSwingPoints(candles, w);
+    const recentLows = lows.filter(l => l.idx >= candles.length-90);
+    const supportsBelow = recentLows.filter(l => l.price <= currentPrice*1.02).sort((a,b)=> b.price - a.price);
+    if(supportsBelow.length > 0) return { value: supportsBelow[0].price, method: 'swing' };
+  }
+  // fallback: saham sideways / swing point tidak jelas -> pakai persentil bawah dari 90 hari terakhir
+  const lowsSorted = candles.slice(-90).map(c=>c.low).sort((a,b)=>a-b);
+  return { value: percentile(lowsSorted, 0.15), method: 'percentile' };
+}
+
+function computeResistanceLevel(candles, currentPrice){
+  for(const w of [3, 2, 1]){
+    const { highs } = findSwingPoints(candles, w);
+    const recentHighs = highs.filter(h => h.idx >= candles.length-90);
+    const resistancesAbove = recentHighs.filter(h => h.price >= currentPrice*0.98).sort((a,b)=> a.price - b.price);
+    if(resistancesAbove.length > 0) return { value: resistancesAbove[0].price, method: 'swing' };
+  }
+  const highsSorted = candles.slice(-90).map(c=>c.high).sort((a,b)=>a-b);
+  return { value: percentile(highsSorted, 0.85), method: 'percentile' };
+}
+
 function analyzeDCA(candles){
   const closes = candles.map(c => c.close);
   const currentPrice = closes[closes.length-1];
@@ -2113,7 +2142,6 @@ function analyzeDCA(candles){
   const ema50Arr = calcEMA(closes, 50);
   const rsiArr = calcRSI(closes, 14);
   const { histogram } = calcMACD(closes);
-  const { lows, highs } = findSwingPoints(candles, 3);
 
   const ema20 = ema20Arr[ema20Arr.length-1];
   const ema50 = ema50Arr[ema50Arr.length-1] || null;
@@ -2121,13 +2149,11 @@ function analyzeDCA(candles){
   const histNow = histogram[histogram.length-1];
   const histPrev = histogram[histogram.length-4];
 
-  const recentLows = lows.filter(l => l.idx >= candles.length-90);
-  const supportsBelow = recentLows.filter(l => l.price <= currentPrice*1.02).sort((a,b)=> b.price - a.price);
-  const nearestSupport = supportsBelow[0]?.price ?? Math.min(...closes.slice(-90));
-
-  const recentHighs = highs.filter(h => h.idx >= candles.length-90);
-  const resistancesAbove = recentHighs.filter(h => h.price >= currentPrice*0.98).sort((a,b)=> a.price - b.price);
-  const nearestResistance = resistancesAbove[0]?.price ?? Math.max(...closes.slice(-90));
+  const supportResult = computeSupportLevel(candles, currentPrice);
+  const resistanceResult = computeResistanceLevel(candles, currentPrice);
+  const nearestSupport = supportResult.value;
+  const nearestResistance = resistanceResult.value;
+  const levelsApproximate = supportResult.method === 'percentile' || resistanceResult.method === 'percentile';
 
   const last30 = candles.slice(-30);
   const range30High = Math.max(...last30.map(c=>c.high));
@@ -2174,7 +2200,7 @@ function analyzeDCA(candles){
   return {
     currentPrice, zoneLow, zoneHigh, nearestSupport, nearestResistance,
     range30High, range30Low, rsi, ema20, ema50, checks, score,
-    verdictClass, verdictText, isBrokenSupport, isPriceAboveZone
+    verdictClass, verdictText, isBrokenSupport, isPriceAboveZone, levelsApproximate
   };
 }
 
@@ -2220,6 +2246,7 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
         </div>
 
         <button class="btn secondary" id="btn-save-dca">Simpan analisa ini</button>
+        ${r.levelsApproximate ? '<div class="warn" style="margin-top:12px;">Saham ini kurang punya swing point yang jelas (cenderung sideways), jadi support/resistance di atas hasil pendekatan statistik (persentil harga 90 hari terakhir), bukan level struktural yang tegas.</div>' : ''}
         <div class="warn" style="margin-top:12px;">Ini bantuan baca teknikal berdasarkan data historis, bukan nasihat investasi. Keputusan akhir tetap di kamu.</div>
       </div>
     `;
@@ -2292,6 +2319,7 @@ function renderDcaList(){
         <div></div>
       </div>
       <div class="j-actions">
+        <button data-action="recheck-dca" data-ticker="${d.ticker}">Cek ulang</button>
         <button data-action="delete-dca" data-id="${d.id}">Hapus</button>
       </div>
     </div>
@@ -2300,6 +2328,11 @@ function renderDcaList(){
     if(!confirm('Hapus riwayat analisa ini?')) return;
     try{ await dcaRef().doc(b.dataset.id).delete(); }
     catch(e){ alert('Gagal menghapus: ' + e.message); }
+  }));
+  container.querySelectorAll('[data-action="recheck-dca"]').forEach(b => b.addEventListener('click', ()=>{
+    document.getElementById('dca-ticker').value = b.dataset.ticker;
+    document.getElementById('btn-dca-analyze').click();
+    document.getElementById('dca-ticker').scrollIntoView({ behavior:'smooth', block:'center' });
   }));
 }
 </script>
