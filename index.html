@@ -306,6 +306,7 @@
 
     <div class="card">
       <p class="card-title">Riwayat analisa tersimpan</p>
+      <button class="btn ghost" id="btn-clean-dca-dupes" style="margin-bottom:12px;">Bersihkan duplikat</button>
       <div id="dca-saved-list"></div>
     </div>
   </div>
@@ -2306,10 +2307,10 @@ async function saveDcaAnalysis(){
       verdictClass: r.verdictClass,
       weeklyTrend: r.weeklyTrend
     };
-    // Cek dulu apakah ticker ini sudah pernah dianalisa & disimpan di tanggal yang sama -> update, bukan bikin entri baru
-    const existing = dcaCache.find(d => d.ticker === r.ticker && d.date === r.date);
-    if(existing){
-      await dcaRef().doc(existing.id).update(payload);
+    // Cek langsung ke Firestore (bukan cache lokal) supaya tidak race condition dengan listener yang belum sempat sinkron
+    const existingSnap = await dcaRef().where('ticker', '==', r.ticker).where('date', '==', r.date).limit(1).get();
+    if(!existingSnap.empty){
+      await dcaRef().doc(existingSnap.docs[0].id).update(payload);
     } else {
       await dcaRef().add({ ...payload, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     }
@@ -2333,6 +2334,39 @@ function subscribeDca(){
     document.getElementById('dca-saved-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + err.message + '</div>';
   });
 }
+
+document.getElementById('btn-clean-dca-dupes').addEventListener('click', async ()=>{
+  const groups = {};
+  dcaCache.forEach(d => {
+    const key = d.ticker + '|' + d.date;
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(d);
+  });
+  // dcaCache sudah urut desc by createdAt, jadi index [0] tiap grup adalah yang paling baru -> dipertahankan, sisanya dihapus
+  const toDelete = [];
+  Object.values(groups).forEach(group => {
+    if(group.length > 1){
+      for(let i=1; i<group.length; i++) toDelete.push(group[i].id);
+    }
+  });
+  if(toDelete.length === 0){
+    alert('Tidak ada duplikat yang ditemukan.');
+    return;
+  }
+  if(!confirm(`Ditemukan ${toDelete.length} entri duplikat (ticker + tanggal sama). Hapus yang lama, sisakan yang paling baru?`)) return;
+  const btn = document.getElementById('btn-clean-dca-dupes');
+  btn.disabled = true;
+  btn.textContent = 'Membersihkan...';
+  try{
+    await Promise.all(toDelete.map(id => dcaRef().doc(id).delete()));
+    btn.textContent = `Selesai, ${toDelete.length} entri dihapus`;
+    setTimeout(()=>{ btn.textContent = 'Bersihkan duplikat'; btn.disabled = false; }, 2500);
+  }catch(e){
+    alert('Gagal membersihkan: ' + e.message);
+    btn.textContent = 'Bersihkan duplikat';
+    btn.disabled = false;
+  }
+});
 
 function renderDcaList(){
   const container = document.getElementById('dca-saved-list');
