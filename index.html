@@ -2239,7 +2239,7 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
   try{
     const [candles, weeklyCandles] = await Promise.all([
       fetchYahooCandles(ticker, '1d', '6mo'),
-      fetchYahooCandles(ticker, '1wk', '3y').catch(()=> null) // weekly opsional, kalau gagal tetap lanjut pakai Daily saja
+      fetchYahooCandles(ticker, '1wk', '2y').catch(()=> null) // weekly opsional, kalau gagal tetap lanjut pakai Daily saja
     ]);
     const r = analyzeDCA(candles, weeklyCandles);
     currentDcaResult = { ticker, ...r, date: new Date().toISOString().slice(0,10) };
@@ -2296,7 +2296,7 @@ async function saveDcaAnalysis(){
   btn.disabled = true;
   try{
     const r = currentDcaResult;
-    await dcaRef().add({
+    const payload = {
       ticker: r.ticker,
       date: r.date,
       currentPrice: r.currentPrice,
@@ -2304,9 +2304,15 @@ async function saveDcaAnalysis(){
       zoneHigh: r.zoneHigh,
       score: r.score,
       verdictClass: r.verdictClass,
-      weeklyTrend: r.weeklyTrend,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+      weeklyTrend: r.weeklyTrend
+    };
+    // Cek dulu apakah ticker ini sudah pernah dianalisa & disimpan di tanggal yang sama -> update, bukan bikin entri baru
+    const existing = dcaCache.find(d => d.ticker === r.ticker && d.date === r.date);
+    if(existing){
+      await dcaRef().doc(existing.id).update(payload);
+    } else {
+      await dcaRef().add({ ...payload, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
     btn.textContent = 'Tersimpan ✓';
     setTimeout(()=>{ btn.textContent = 'Simpan analisa ini'; btn.disabled = false; }, 2000);
   }catch(e){
