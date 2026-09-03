@@ -2013,7 +2013,8 @@ async function fetchYahooCandles(ticker, interval='1d', range='6mo'){
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`;
   const proxies = [
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`
+    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`
   ];
   let lastErr = null;
   for(const proxyUrl of proxies){
@@ -2236,12 +2237,12 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
   }
   const btn = document.getElementById('btn-dca-analyze');
   btn.disabled = true;
-  btn.textContent = 'Menganalisa...';
+  btn.textContent = 'Mengambil data harian...';
   try{
-    const [candles, weeklyCandles] = await Promise.all([
-      fetchYahooCandles(ticker, '1d', '6mo'),
-      fetchYahooCandles(ticker, '1wk', '2y').catch(()=> null) // weekly opsional, kalau gagal tetap lanjut pakai Daily saja
-    ]);
+    const candles = await fetchYahooCandles(ticker, '1d', '6mo');
+    btn.textContent = 'Mengambil data mingguan...';
+    await new Promise(res => setTimeout(res, 400)); // jeda kecil biar proxy tidak dibanjiri 2 request beruntun
+    const weeklyCandles = await fetchYahooCandles(ticker, '1wk', '2y').catch(()=> null); // weekly opsional, kalau gagal tetap lanjut pakai Daily saja
     const r = analyzeDCA(candles, weeklyCandles);
     currentDcaResult = { ticker, ...r, date: new Date().toISOString().slice(0,10) };
 
@@ -2283,7 +2284,10 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
     resultBox.style.display = 'block';
     document.getElementById('btn-save-dca').addEventListener('click', saveDcaAnalysis);
   }catch(e){
-    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).</div>';
+    const rateLimited = /401|429|rate/i.test(e.message);
+    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + (rateLimited
+      ? ' Ini biasanya karena layanan proxy gratis lagi dibatasi (rate limit) akibat kebanyakan cek dalam waktu singkat. Tunggu 30-60 detik lalu coba lagi.'
+      : ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).') + '</div>';
   }
   btn.disabled = false;
   btn.textContent = 'Analisa';
