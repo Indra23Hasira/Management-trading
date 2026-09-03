@@ -70,6 +70,18 @@
   .status-partial{background:var(--blue-dim); color:var(--blue);}
   .status-closed-win{background:var(--green-dim); color:var(--green);}
   .status-closed-loss{background:var(--red-dim); color:var(--red);}
+  .dca-verdict{padding:14px 16px; border-radius:10px; margin-bottom:14px; font-size:13px; line-height:1.5;}
+  .dca-verdict.v-strong{background:var(--green-dim); border:1px solid var(--green); color:#B8F5DD;}
+  .dca-verdict.v-mid{background:var(--amber-dim); border:1px solid var(--amber); color:#FFD98A;}
+  .dca-verdict.v-expensive{background:var(--blue-dim); border:1px solid var(--blue); color:#BEDCFF;}
+  .dca-verdict.v-breakdown{background:var(--red-dim); border:1px solid var(--red); color:#FFB3BE;}
+  .checklist{display:flex; flex-direction:column; gap:8px; margin:14px 0;}
+  .checklist-item{display:flex; align-items:flex-start; gap:8px; font-size:12px; color:var(--text-secondary);}
+  .checklist-item .mark{flex-shrink:0; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; margin-top:1px;}
+  .checklist-item.met .mark{background:var(--green-dim); color:var(--green);}
+  .checklist-item.unmet .mark{background:var(--surface-2); color:var(--text-muted);}
+  .checklist-item.met{color:var(--text-primary);}
+  .score-badge{display:inline-block; font-family:var(--mono); font-weight:700; font-size:13px; padding:3px 10px; border-radius:6px; background:var(--surface-2);}
   .exit-list{background:var(--surface-2); border-radius:8px; padding:8px 10px; margin-bottom:10px;}
   .exit-row{display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:4px 0; border-bottom:1px dashed var(--border);}
   .exit-row:last-child{border-bottom:none;}
@@ -146,6 +158,7 @@
     <div class="tab" data-tab="calc">Kalkulator</div>
     <div class="tab" data-tab="journal">Jurnal Trading</div>
     <div class="tab" data-tab="dividen">Simulasi Dividen</div>
+    <div class="tab" data-tab="dca">Timing DCA</div>
     <div class="tab" data-tab="sizing">Batas Posisi</div>
     <div class="tab" data-tab="aturan">Aturan Keuangan</div>
   </div>
@@ -276,6 +289,24 @@
     <div class="card">
       <p class="card-title">Simulasi tersimpan</p>
       <div id="dv-saved-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-dca">
+    <div class="card">
+      <p class="card-title">Cek zona entry DCA bulan ini</p>
+      <div class="field" style="margin-bottom:12px;">
+        <label>Ticker</label>
+        <input type="text" id="dca-ticker" placeholder="cth. ADRO" style="text-transform:uppercase;">
+      </div>
+      <button class="btn" id="btn-dca-analyze">Analisa</button>
+      <div id="dca-err-box"></div>
+    </div>
+    <div id="dca-result-box" style="display:none;"></div>
+
+    <div class="card">
+      <p class="card-title">Riwayat analisa tersimpan</p>
+      <div id="dca-saved-list"></div>
     </div>
   </div>
 
@@ -582,6 +613,7 @@ auth.onAuthStateChanged(user => {
     subscribeSizing();
     subscribeAturan();
     subscribeRencana();
+    subscribeDca();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
@@ -591,6 +623,7 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeSizing){ unsubscribeSizing(); unsubscribeSizing = null; }
     if(unsubscribeAturan){ unsubscribeAturan(); unsubscribeAturan = null; }
     if(unsubscribeRencana){ unsubscribeRencana(); unsubscribeRencana = null; }
+    if(unsubscribeDca){ unsubscribeDca(); unsubscribeDca = null; }
     rencanaAutoRefreshDone = false;
   }
 });
@@ -1966,6 +1999,309 @@ document.getElementById('btn-save-exit').addEventListener('click', async ()=>{
   }
   btn.disabled = false;
 });
+
+// ==================== TIMING DCA ====================
+
+function dcaRef(){
+  return db.collection('users').doc(currentUser.uid).collection('dca_analysis');
+}
+
+// --- Ambil data harga historis dari Yahoo Finance (via CORS proxy) ---
+async function fetchYahooCandles(ticker){
+  const symbol = ticker.toUpperCase() + '.JK';
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=6mo&interval=1d`;
+  const proxies = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`
+  ];
+  let lastErr = null;
+  for(const proxyUrl of proxies){
+    try{
+      const res = await fetch(proxyUrl);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const result = data?.chart?.result?.[0];
+      if(!result) throw new Error('Data tidak ditemukan untuk ticker ini.');
+      const ts = result.timestamp;
+      const quote = result.indicators.quote[0];
+      const candles = [];
+      for(let i=0; i<ts.length; i++){
+        if(quote.close[i] == null) continue;
+        candles.push({
+          date: new Date(ts[i]*1000).toISOString().slice(0,10),
+          open: quote.open[i], high: quote.high[i], low: quote.low[i],
+          close: quote.close[i], volume: quote.volume[i]
+        });
+      }
+      if(candles.length < 30) throw new Error('Data historis terlalu sedikit.');
+      return candles;
+    }catch(e){
+      lastErr = e;
+      continue;
+    }
+  }
+  throw new Error(lastErr ? lastErr.message : 'Gagal mengambil data harga.');
+}
+
+// --- Indikator teknikal ---
+function calcEMA(closes, period){
+  const k = 2/(period+1);
+  const emaArr = [];
+  let ema = closes.slice(0, period).reduce((a,b)=>a+b,0) / period;
+  emaArr[period-1] = ema;
+  for(let i=period; i<closes.length; i++){
+    ema = closes[i]*k + ema*(1-k);
+    emaArr[i] = ema;
+  }
+  return emaArr;
+}
+
+function calcRSI(closes, period=14){
+  const rsiArr = [];
+  let gains=0, losses=0;
+  for(let i=1; i<=period; i++){
+    const diff = closes[i]-closes[i-1];
+    if(diff >= 0) gains += diff; else losses -= diff;
+  }
+  let avgGain = gains/period, avgLoss = losses/period;
+  rsiArr[period] = avgLoss === 0 ? 100 : 100 - (100/(1+(avgGain/avgLoss)));
+  for(let i=period+1; i<closes.length; i++){
+    const diff = closes[i]-closes[i-1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain*(period-1)+gain)/period;
+    avgLoss = (avgLoss*(period-1)+loss)/period;
+    rsiArr[i] = avgLoss === 0 ? 100 : 100 - (100/(1+(avgGain/avgLoss)));
+  }
+  return rsiArr;
+}
+
+function calcMACD(closes){
+  const ema12 = calcEMA(closes, 12);
+  const ema26 = calcEMA(closes, 26);
+  const macdLine = closes.map((_,i) => (ema12[i]!=null && ema26[i]!=null) ? ema12[i]-ema26[i] : null);
+  const macdValues = macdLine.filter(v => v!=null);
+  const signalRaw = calcEMA(macdValues, 9);
+  const firstMacdIdx = macdLine.findIndex(v => v!=null);
+  const signalLine = new Array(closes.length).fill(null);
+  for(let i=0; i<signalRaw.length; i++){
+    if(signalRaw[i] != null) signalLine[firstMacdIdx+i] = signalRaw[i];
+  }
+  const histogram = closes.map((_,i) => (macdLine[i]!=null && signalLine[i]!=null) ? macdLine[i]-signalLine[i] : null);
+  return { macdLine, signalLine, histogram };
+}
+
+// Deteksi swing low/high sederhana (local minima/maxima dengan window 3 hari)
+function findSwingPoints(candles, window=3){
+  const lows = [], highs = [];
+  for(let i=window; i<candles.length-window; i++){
+    let isLow = true, isHigh = true;
+    for(let w=1; w<=window; w++){
+      if(candles[i].low > candles[i-w].low || candles[i].low > candles[i+w].low) isLow = false;
+      if(candles[i].high < candles[i-w].high || candles[i].high < candles[i+w].high) isHigh = false;
+    }
+    if(isLow) lows.push({ idx:i, price: candles[i].low, date: candles[i].date });
+    if(isHigh) highs.push({ idx:i, price: candles[i].high, date: candles[i].date });
+  }
+  return { lows, highs };
+}
+
+function analyzeDCA(candles){
+  const closes = candles.map(c => c.close);
+  const currentPrice = closes[closes.length-1];
+  const ema20Arr = calcEMA(closes, 20);
+  const ema50Arr = calcEMA(closes, 50);
+  const rsiArr = calcRSI(closes, 14);
+  const { histogram } = calcMACD(closes);
+  const { lows, highs } = findSwingPoints(candles, 3);
+
+  const ema20 = ema20Arr[ema20Arr.length-1];
+  const ema50 = ema50Arr[ema50Arr.length-1] || null;
+  const rsi = rsiArr[rsiArr.length-1];
+  const histNow = histogram[histogram.length-1];
+  const histPrev = histogram[histogram.length-4];
+
+  const recentLows = lows.filter(l => l.idx >= candles.length-90);
+  const supportsBelow = recentLows.filter(l => l.price <= currentPrice*1.02).sort((a,b)=> b.price - a.price);
+  const nearestSupport = supportsBelow[0]?.price ?? Math.min(...closes.slice(-90));
+
+  const recentHighs = highs.filter(h => h.idx >= candles.length-90);
+  const resistancesAbove = recentHighs.filter(h => h.price >= currentPrice*0.98).sort((a,b)=> a.price - b.price);
+  const nearestResistance = resistancesAbove[0]?.price ?? Math.max(...closes.slice(-90));
+
+  const last30 = candles.slice(-30);
+  const range30High = Math.max(...last30.map(c=>c.high));
+  const range30Low = Math.min(...last30.map(c=>c.low));
+
+  let zoneLow, zoneHigh;
+  if(ema50 && ema20 > ema50){
+    zoneLow = nearestSupport;
+    zoneHigh = Math.max(ema20, nearestSupport);
+  } else {
+    zoneLow = nearestSupport;
+    zoneHigh = ema20;
+  }
+  if(zoneLow > zoneHigh){ const tmp = zoneLow; zoneLow = zoneHigh; zoneHigh = tmp; }
+
+  const isBrokenSupport = currentPrice < nearestSupport * 0.98;
+  const isPriceInZone = currentPrice >= zoneLow*0.98 && currentPrice <= zoneHigh*1.02;
+  const isPriceAboveZone = currentPrice > zoneHigh*1.02;
+
+  const checks = [
+    { label: 'Struktur tren masih naik (EMA20 di atas EMA50)', met: ema50 ? ema20 > ema50 : true },
+    { label: 'RSI di area reset/netral (35-58), bukan overbought', met: rsi >= 35 && rsi <= 58 },
+    { label: 'Momentum MACD mulai membaik (histogram naik dari 3 hari lalu)', met: histNow!=null && histPrev!=null && histNow > histPrev },
+    { label: 'Harga sekarang dekat/di dalam zona support-EMA20', met: isPriceInZone },
+    { label: 'Belum breakdown di bawah support struktural', met: !isBrokenSupport }
+  ];
+  const score = checks.filter(c => c.met).length;
+
+  let verdictClass, verdictText;
+  if(isBrokenSupport){
+    verdictClass = 'v-breakdown';
+    verdictText = `Harga sudah break di bawah support struktural (${fmtRp(nearestSupport)}). Ini bukan pullback sehat — kalau mau DCA, tunggu ada tanda stabil dulu (misal harga balik naik di atas support ini beberapa hari), jangan average down dulu di sini.`;
+  } else if(isPriceAboveZone){
+    verdictClass = 'v-expensive';
+    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) masih di atas zona entry ideal (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}). Belum area pullback yang menarik — bisa tunggu retrace ke zona itu dulu sebelum nambah DCA bulan ini.`;
+  } else if(score >= 4){
+    verdictClass = 'v-strong';
+    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) berada di zona entry yang cukup baik (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), dan ${score} dari 5 kriteria teknikal terpenuhi. Ini kandidat wajar untuk DCA bulan ini.`;
+  } else {
+    verdictClass = 'v-mid';
+    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) ada di sekitar zona entry (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), tapi cuma ${score} dari 5 kriteria yang terpenuhi. Bukan sinyal terkuat — boleh DCA dengan porsi lebih kecil, atau tunggu konfirmasi lanjutan.`;
+  }
+
+  return {
+    currentPrice, zoneLow, zoneHigh, nearestSupport, nearestResistance,
+    range30High, range30Low, rsi, ema20, ema50, checks, score,
+    verdictClass, verdictText, isBrokenSupport, isPriceAboveZone
+  };
+}
+
+document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
+  const errBox = document.getElementById('dca-err-box');
+  const resultBox = document.getElementById('dca-result-box');
+  errBox.innerHTML = '';
+  resultBox.style.display = 'none';
+  const ticker = document.getElementById('dca-ticker').value.trim().toUpperCase();
+  if(!ticker){
+    errBox.innerHTML = '<div class="err">Ticker harus diisi.</div>';
+    return;
+  }
+  const btn = document.getElementById('btn-dca-analyze');
+  btn.disabled = true;
+  btn.textContent = 'Menganalisa...';
+  try{
+    const candles = await fetchYahooCandles(ticker);
+    const r = analyzeDCA(candles);
+    currentDcaResult = { ticker, ...r, date: new Date().toISOString().slice(0,10) };
+
+    resultBox.innerHTML = `
+      <div class="card">
+        <div class="dca-verdict ${r.verdictClass}">${r.verdictText}</div>
+
+        <div class="stat-grid" style="margin-bottom:14px;">
+          <div class="stat"><div class="k">Harga sekarang</div><div class="v">${fmtRp(r.currentPrice)}</div></div>
+          <div class="stat"><div class="k">Skor confluence</div><div class="v"><span class="score-badge">${r.score} / 5</span></div></div>
+          <div class="stat"><div class="k">Zona entry ideal</div><div class="v" style="font-size:13px;">${fmtRp(r.zoneLow)} - ${fmtRp(r.zoneHigh)}</div></div>
+          <div class="stat"><div class="k">Range 30 hari</div><div class="v" style="font-size:13px;">${fmtRp(r.range30Low)} - ${fmtRp(r.range30High)}</div></div>
+          <div class="stat"><div class="k">Support terdekat</div><div class="v" style="color:var(--green);">${fmtRp(r.nearestSupport)}</div></div>
+          <div class="stat"><div class="k">Resistance terdekat</div><div class="v" style="color:var(--red);">${fmtRp(r.nearestResistance)}</div></div>
+        </div>
+
+        <p class="card-title">Checklist teknikal</p>
+        <div class="checklist">
+          ${r.checks.map(c => `
+            <div class="checklist-item ${c.met ? 'met' : 'unmet'}">
+              <span class="mark">${c.met ? '✓' : '·'}</span>
+              <span>${c.label}</span>
+            </div>
+          `).join('')}
+        </div>
+
+        <button class="btn secondary" id="btn-save-dca">Simpan analisa ini</button>
+        <div class="warn" style="margin-top:12px;">Ini bantuan baca teknikal berdasarkan data historis, bukan nasihat investasi. Keputusan akhir tetap di kamu.</div>
+      </div>
+    `;
+    resultBox.style.display = 'block';
+    document.getElementById('btn-save-dca').addEventListener('click', saveDcaAnalysis);
+  }catch(e){
+    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).</div>';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Analisa';
+});
+
+let currentDcaResult = null;
+
+async function saveDcaAnalysis(){
+  if(!currentDcaResult || !currentUser) return;
+  const btn = document.getElementById('btn-save-dca');
+  btn.disabled = true;
+  try{
+    const r = currentDcaResult;
+    await dcaRef().add({
+      ticker: r.ticker,
+      date: r.date,
+      currentPrice: r.currentPrice,
+      zoneLow: r.zoneLow,
+      zoneHigh: r.zoneHigh,
+      score: r.score,
+      verdictClass: r.verdictClass,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    btn.textContent = 'Tersimpan ✓';
+    setTimeout(()=>{ btn.textContent = 'Simpan analisa ini'; btn.disabled = false; }, 2000);
+  }catch(e){
+    alert('Gagal menyimpan: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+let dcaCache = [];
+let unsubscribeDca = null;
+
+function subscribeDca(){
+  if(unsubscribeDca) unsubscribeDca();
+  unsubscribeDca = dcaRef().orderBy('createdAt', 'desc').onSnapshot(snap => {
+    dcaCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderDcaList();
+  }, err => {
+    document.getElementById('dca-saved-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + err.message + '</div>';
+  });
+}
+
+function renderDcaList(){
+  const container = document.getElementById('dca-saved-list');
+  if(dcaCache.length === 0){
+    container.innerHTML = '<div class="empty">Belum ada analisa tersimpan.<br>Analisa dulu ticker-nya lalu klik "Simpan analisa ini".</div>';
+    return;
+  }
+  const badgeMap = { 'v-strong':'status-closed-win', 'v-mid':'status-open', 'v-expensive':'status-partial', 'v-breakdown':'status-closed-loss' };
+  const labelMap = { 'v-strong':'Zona baik', 'v-mid':'Cukup', 'v-expensive':'Masih mahal', 'v-breakdown':'Breakdown' };
+  container.innerHTML = dcaCache.map(d => `
+    <div class="j-entry">
+      <div class="j-top">
+        <div><span class="j-ticker">${d.ticker}</span><span class="j-date" style="margin-left:8px;">${d.date}</span></div>
+        <span class="j-status ${badgeMap[d.verdictClass]||'status-open'}">${labelMap[d.verdictClass]||'-'}</span>
+      </div>
+      <div class="j-grid">
+        <div><div class="k">Harga saat cek</div><div class="v">${fmtNum(d.currentPrice)}</div></div>
+        <div><div class="k">Zona entry</div><div class="v" style="font-size:11px;">${fmtNum(d.zoneLow)}-${fmtNum(d.zoneHigh)}</div></div>
+        <div><div class="k">Skor</div><div class="v">${d.score}/5</div></div>
+        <div></div>
+      </div>
+      <div class="j-actions">
+        <button data-action="delete-dca" data-id="${d.id}">Hapus</button>
+      </div>
+    </div>
+  `).join('');
+  container.querySelectorAll('[data-action="delete-dca"]').forEach(b => b.addEventListener('click', async ()=>{
+    if(!confirm('Hapus riwayat analisa ini?')) return;
+    try{ await dcaRef().doc(b.dataset.id).delete(); }
+    catch(e){ alert('Gagal menghapus: ' + e.message); }
+  }));
+}
 </script>
 </body>
 </html>
