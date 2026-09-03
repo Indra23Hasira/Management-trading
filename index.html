@@ -2011,17 +2011,36 @@ function dcaRef(){
 async function fetchYahooCandles(ticker, interval='1d', range='6mo'){
   const symbol = ticker.toUpperCase() + '.JK';
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`;
+  const enc = encodeURIComponent(yahooUrl);
+  const jinaTarget = yahooUrl.replace(/&/g, '%26');
   const proxies = [
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`
+    { url: `https://r.jina.ai/${jinaTarget}`, mode: 'jina' },
+    { url: `https://api.allorigins.win/raw?url=${enc}`, mode: 'plain' },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, mode: 'plain' },
+    { url: `https://corsproxy.io/?url=${enc}`, mode: 'plain' },
+    { url: `https://api.allorigins.win/get?url=${enc}`, mode: 'wrapped' } // format beda: hasil dibungkus {contents: "..."}
   ];
   let lastErr = null;
-  for(const proxyUrl of proxies){
+  for(const proxy of proxies){
     try{
-      const res = await fetch(proxyUrl);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(()=> controller.abort(), 10000);
+      const res = await fetch(proxy.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if(!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
+      let data;
+      if(proxy.mode === 'wrapped'){
+        const wrapper = await res.json();
+        data = JSON.parse(wrapper.contents);
+      } else if(proxy.mode === 'jina'){
+        // r.jina.ai membungkus hasil dengan teks "Title:...URL Source:...Markdown Content:" sebelum JSON aslinya
+        const text = await res.text();
+        const jsonStart = text.indexOf('{');
+        if(jsonStart === -1) throw new Error('Format respons proxy tidak dikenali');
+        data = JSON.parse(text.slice(jsonStart));
+      } else {
+        data = await res.json();
+      }
       const result = data?.chart?.result?.[0];
       if(!result) throw new Error('Data tidak ditemukan untuk ticker ini.');
       const ts = result.timestamp;
@@ -2042,7 +2061,7 @@ async function fetchYahooCandles(ticker, interval='1d', range='6mo'){
       continue;
     }
   }
-  throw new Error(lastErr ? lastErr.message : 'Gagal mengambil data harga.');
+  throw new Error(lastErr ? (lastErr.name === 'AbortError' ? 'Semua proxy timeout (jaringan lambat/diblokir).' : lastErr.message) : 'Gagal mengambil data harga.');
 }
 
 // --- Indikator teknikal ---
@@ -2285,9 +2304,12 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
     document.getElementById('btn-save-dca').addEventListener('click', saveDcaAnalysis);
   }catch(e){
     const rateLimited = /401|429|rate/i.test(e.message);
-    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + (rateLimited
-      ? ' Ini biasanya karena layanan proxy gratis lagi dibatasi (rate limit) akibat kebanyakan cek dalam waktu singkat. Tunggu 30-60 detik lalu coba lagi.'
-      : ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).') + '</div>';
+    const networkBlocked = /failed to fetch|timeout|networkerror/i.test(e.message);
+    let extra;
+    if(rateLimited) extra = ' Ini biasanya karena layanan proxy gratis lagi dibatasi (rate limit) akibat kebanyakan cek dalam waktu singkat. Tunggu 30-60 detik lalu coba lagi.';
+    else if(networkBlocked) extra = ' Semua proxy gratis yang dicoba gagal dihubungi (server proxy down, atau diblokir jaringan/ekstensi browser kamu). Coba matikan ad-blocker/VPN sebentar, ganti jaringan (WiFi ke data seluler atau sebaliknya), atau coba lagi beberapa menit lagi.';
+    else extra = ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).';
+    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + extra + '</div>';
   }
   btn.disabled = false;
   btn.textContent = 'Analisa';
