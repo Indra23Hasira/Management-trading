@@ -2007,9 +2007,9 @@ function dcaRef(){
 }
 
 // --- Ambil data harga historis dari Yahoo Finance (via CORS proxy) ---
-async function fetchYahooCandles(ticker){
+async function fetchYahooCandles(ticker, interval='1d', range='6mo'){
   const symbol = ticker.toUpperCase() + '.JK';
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=6mo&interval=1d`;
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`;
   const proxies = [
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
     `https://corsproxy.io/?url=${encodeURIComponent(yahooUrl)}`
@@ -2135,12 +2135,26 @@ function computeResistanceLevel(candles, currentPrice){
   return { value: percentile(highsSorted, 0.85), method: 'percentile' };
 }
 
-function analyzeDCA(candles){
+function analyzeDCA(candles, weeklyCandles){
   const closes = candles.map(c => c.close);
   const currentPrice = closes[closes.length-1];
   const ema20Arr = calcEMA(closes, 20);
   const ema50Arr = calcEMA(closes, 50);
   const rsiArr = calcRSI(closes, 14);
+
+  // Konfirmasi arah dari Weekly (W1) - dicek duluan, sama seperti alur Swing: Weekly/Daily konfirmasi arah dulu
+  let weeklyTrend = 'unknown';
+  let weeklyEma20 = null, weeklyEma50 = null;
+  if(weeklyCandles && weeklyCandles.length >= 55){
+    const weeklyCloses = weeklyCandles.map(c => c.close);
+    const wEma20Arr = calcEMA(weeklyCloses, 20);
+    const wEma50Arr = calcEMA(weeklyCloses, 50);
+    weeklyEma20 = wEma20Arr[wEma20Arr.length-1];
+    weeklyEma50 = wEma50Arr[wEma50Arr.length-1];
+    if(weeklyEma20 != null && weeklyEma50 != null){
+      weeklyTrend = weeklyEma20 > weeklyEma50 ? 'bullish' : 'bearish';
+    }
+  }
   const { histogram } = calcMACD(closes);
 
   const ema20 = ema20Arr[ema20Arr.length-1];
@@ -2183,7 +2197,10 @@ function analyzeDCA(candles){
   const score = checks.filter(c => c.met).length;
 
   let verdictClass, verdictText;
-  if(isBrokenSupport){
+  if(weeklyTrend === 'bearish'){
+    verdictClass = 'v-breakdown';
+    verdictText = `Weekly (W1) masih dalam tren turun (EMA20 di bawah EMA50) — ini dicek duluan karena arah besar lebih penting daripada timing kecil. Walau di Daily ada zona pullback yang kelihatan menarik (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), DCA di tengah downtrend Weekly berisiko keburu-buru nyangkut lebih lama, mirip pengalaman kamu sebelumnya. Lebih aman tunggu Weekly berbalik naik (EMA20 potong ke atas EMA50) dulu sebelum lanjut DCA rutin.`;
+  } else if(isBrokenSupport){
     verdictClass = 'v-breakdown';
     verdictText = `Harga sudah break di bawah support struktural (${fmtRp(nearestSupport)}). Ini bukan pullback sehat — kalau mau DCA, tunggu ada tanda stabil dulu (misal harga balik naik di atas support ini beberapa hari), jangan average down dulu di sini.`;
   } else if(isPriceAboveZone){
@@ -2191,16 +2208,18 @@ function analyzeDCA(candles){
     verdictText = `Harga sekarang (${fmtRp(currentPrice)}) masih di atas zona entry ideal (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}). Belum area pullback yang menarik — bisa tunggu retrace ke zona itu dulu sebelum nambah DCA bulan ini.`;
   } else if(score >= 4){
     verdictClass = 'v-strong';
-    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) berada di zona entry yang cukup baik (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), dan ${score} dari 5 kriteria teknikal terpenuhi. Ini kandidat wajar untuk DCA bulan ini.`;
+    const weeklyNote = weeklyTrend === 'bullish' ? ' Weekly juga masih mendukung tren naik, jadi confluence-nya makin kuat.' : (weeklyTrend === 'unknown' ? ' (Data Weekly belum cukup untuk konfirmasi tambahan, jadi ini murni bacaan Daily.)' : '');
+    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) berada di zona entry yang cukup baik (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), dan ${score} dari 5 kriteria teknikal Daily terpenuhi.${weeklyNote} Ini kandidat wajar untuk DCA bulan ini.`;
   } else {
     verdictClass = 'v-mid';
-    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) ada di sekitar zona entry (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), tapi cuma ${score} dari 5 kriteria yang terpenuhi. Bukan sinyal terkuat — boleh DCA dengan porsi lebih kecil, atau tunggu konfirmasi lanjutan.`;
+    verdictText = `Harga sekarang (${fmtRp(currentPrice)}) ada di sekitar zona entry (${fmtRp(zoneLow)} - ${fmtRp(zoneHigh)}), tapi cuma ${score} dari 5 kriteria Daily yang terpenuhi. Bukan sinyal terkuat — boleh DCA dengan porsi lebih kecil, atau tunggu konfirmasi lanjutan.`;
   }
 
   return {
     currentPrice, zoneLow, zoneHigh, nearestSupport, nearestResistance,
     range30High, range30Low, rsi, ema20, ema50, checks, score,
-    verdictClass, verdictText, isBrokenSupport, isPriceAboveZone, levelsApproximate
+    verdictClass, verdictText, isBrokenSupport, isPriceAboveZone, levelsApproximate,
+    weeklyTrend, weeklyEma20, weeklyEma50
   };
 }
 
@@ -2218,8 +2237,11 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
   btn.disabled = true;
   btn.textContent = 'Menganalisa...';
   try{
-    const candles = await fetchYahooCandles(ticker);
-    const r = analyzeDCA(candles);
+    const [candles, weeklyCandles] = await Promise.all([
+      fetchYahooCandles(ticker, '1d', '6mo'),
+      fetchYahooCandles(ticker, '1wk', '3y').catch(()=> null) // weekly opsional, kalau gagal tetap lanjut pakai Daily saja
+    ]);
+    const r = analyzeDCA(candles, weeklyCandles);
     currentDcaResult = { ticker, ...r, date: new Date().toISOString().slice(0,10) };
 
     resultBox.innerHTML = `
@@ -2233,6 +2255,13 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
           <div class="stat"><div class="k">Range 30 hari</div><div class="v" style="font-size:13px;">${fmtRp(r.range30Low)} - ${fmtRp(r.range30High)}</div></div>
           <div class="stat"><div class="k">Support terdekat</div><div class="v" style="color:var(--green);">${fmtRp(r.nearestSupport)}</div></div>
           <div class="stat"><div class="k">Resistance terdekat</div><div class="v" style="color:var(--red);">${fmtRp(r.nearestResistance)}</div></div>
+        </div>
+
+        <div class="stat" style="margin-bottom:14px;">
+          <div class="k">Konfirmasi arah Weekly (W1)</div>
+          <div class="v" style="color:${r.weeklyTrend==='bullish' ? 'var(--green)' : r.weeklyTrend==='bearish' ? 'var(--red)' : 'var(--text-muted)'};">
+            ${r.weeklyTrend==='bullish' ? 'Bullish — EMA20 di atas EMA50' : r.weeklyTrend==='bearish' ? 'Bearish — EMA20 di bawah EMA50' : 'Data belum cukup untuk konfirmasi'}
+          </div>
         </div>
 
         <p class="card-title">Checklist teknikal</p>
@@ -2275,6 +2304,7 @@ async function saveDcaAnalysis(){
       zoneHigh: r.zoneHigh,
       score: r.score,
       verdictClass: r.verdictClass,
+      weeklyTrend: r.weeklyTrend,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     btn.textContent = 'Tersimpan ✓';
@@ -2316,7 +2346,7 @@ function renderDcaList(){
         <div><div class="k">Harga saat cek</div><div class="v">${fmtNum(d.currentPrice)}</div></div>
         <div><div class="k">Zona entry</div><div class="v" style="font-size:11px;">${fmtNum(d.zoneLow)}-${fmtNum(d.zoneHigh)}</div></div>
         <div><div class="k">Skor</div><div class="v">${d.score}/5</div></div>
-        <div></div>
+        <div><div class="k">Weekly</div><div class="v" style="font-size:11px; color:${d.weeklyTrend==='bullish' ? 'var(--green)' : d.weeklyTrend==='bearish' ? 'var(--red)' : 'var(--text-muted)'};">${d.weeklyTrend==='bullish' ? 'Bullish' : d.weeklyTrend==='bearish' ? 'Bearish' : '-'}</div></div>
       </div>
       <div class="j-actions">
         <button data-action="recheck-dca" data-ticker="${d.ticker}">Cek ulang</button>
