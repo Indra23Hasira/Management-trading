@@ -86,6 +86,8 @@
   .fund-dots{font-family:var(--mono); letter-spacing:1px;}
   .trend-row{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0;}
   .trend-chip{font-family:var(--mono); font-size:11px; padding:3px 8px; border-radius:6px; background:var(--surface-2);}
+  .fund-card .j-top{align-items:flex-start; gap:10px;}
+  .fund-card .j-status{max-width:60%; text-align:right; line-height:1.35; padding:3px 8px;}
   .gate-list{margin:6px 0 0; padding-left:18px; font-size:12px; line-height:1.6;}
   .dca-verdict{padding:14px 16px; border-radius:10px; margin-bottom:14px; font-size:13px; line-height:1.5;}
   .dca-verdict.v-strong{background:var(--green-dim); border:1px solid var(--green); color:#B8F5DD;}
@@ -376,6 +378,8 @@
 
     <div class="card">
       <p class="card-title">Riwayat &amp; tren fundamental</p>
+      <div id="fund-portfolio-summary"></div>
+      <button class="btn ghost" id="btn-fund-recheck-all" style="margin-bottom:12px;">Cek ulang semua</button>
       <div id="fund-history-list"></div>
     </div>
   </div>
@@ -2698,13 +2702,13 @@ function fundPercentile(arr, v){
   return arr.filter(x => x <= v).length / arr.length * 100;
 }
 
-async function fundAnalyze(ticker, kindChoice){
+async function fundAnalyze(ticker, kindChoice, onStep){
   const warnings = [];
   const kind = kindChoice === 'auto' ? fundDetectKind(ticker) : kindChoice;
   const kindAuto = kindChoice === 'auto';
 
   const btn = document.getElementById('btn-fund-analyze');
-  const step = (t) => { btn.textContent = t; };
+  const step = onStep || ((t) => { btn.textContent = t; });
   const pause = () => new Promise(r => setTimeout(r, 400));
 
   step('Mengambil laporan keuangan...');
@@ -2794,14 +2798,14 @@ async function fundAnalyze(ticker, kindChoice){
   const cashQ = (ttmOCF != null && ttmNI > 0) ? ttmOCF/ttmNI : null;
 
   // --- Skor per pilar ---
-  const G = (v) => fundScoreMetric(v, [[x => x >= 10, 2], [x => x >= 0, 1]]);
+  const G = (v) => fundScoreMetric(v, [[x => x >= 10, 2], [x => x >= -5, 1]]);
   const pillars = [];
   if(kind === 'bank'){
     pillars.push({ name:'Profitabilitas', metrics:[
       { label:'ROE', val:fundPlainPct(roe), pts:fundScoreMetric(roe, [[x=>x>=15,2],[x=>x>=10,1]]), hint:'bagus ≥15%' }
     ]});
     pillars.push({ name:'Pertumbuhan', metrics:[
-      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=0,1]]), hint:'bagus ≥8%' },
+      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=-5,1]]), hint:'bagus ≥8%' },
       { label:'Laba bersih YoY', val:niYoY===999?'berbalik untung':fundPct(niYoY), pts:G(niYoY), hint:'bagus ≥10%' }
     ]});
     const br = bankRatios || {};
@@ -2819,7 +2823,7 @@ async function fundAnalyze(ticker, kindChoice){
       { label:'Margin laba bersih', val:fundPlainPct(margin), pts:fundScoreMetric(margin, [[x=>x>=10,2],[x=>x>=4,1]]), hint:'bagus ≥10%' }
     ]});
     pillars.push({ name:'Pertumbuhan', metrics:[
-      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=0,1]]), hint:'bagus ≥8%' },
+      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=-5,1]]), hint:'bagus ≥8%' },
       { label:'Laba bersih YoY', val:niYoY===999?'berbalik untung':fundPct(niYoY), pts:G(niYoY), hint:'bagus ≥10%' }
     ]});
     pillars.push({ name:'Kesehatan neraca', metrics:[
@@ -2922,7 +2926,14 @@ async function fundAnalyze(ticker, kindChoice){
   // --- Saran posisi ---
   let saran, saranCls, saranText, allowDca = false;
   const gateOn = gate.length > 0;
-  if(score < 4){
+  const dataLimited = scored < 5;
+  if(dataLimited){
+    warnings.unshift(`Skor baru dihitung dari ${scored} metrik, jadi belum lengkap. ${kind === 'bank' ? 'Isi CAR, NPL, dan LDR' : 'Isi arus kas operasi'} lewat input laporan kuartal supaya penilaiannya utuh.`);
+  }
+  if(score < 4 && dataLimited){
+    saran = 'Pantau, lengkapi data dulu'; saranCls = 'v-mid';
+    saranText = `Skornya rendah, tapi baru dari ${scored} metrik. Itu belum cukup untuk menyarankan lepas posisi. Jangan tambah dulu, dan lengkapi datanya sebelum mengambil keputusan.`;
+  } else if(score < 4){
     saran = 'Hindari / pertimbangkan lepas'; saranCls = 'v-breakdown';
     saranText = 'Kualitas bisnisnya lemah saat ini. Bukan kandidat untuk ditambah. Kalau sudah pegang, pertimbangkan lepas dan tunggu perbaikan di laporan berikutnya.';
   } else if(delta != null && delta <= -1.5 && trendComparable){
@@ -2958,6 +2969,8 @@ async function fundAnalyze(ticker, kindChoice){
   if(daysSinceNext >= 25){
     newReportHint = `Data terbaru masih ${fundQuarterLabel(latestDate)}. Laporan ${fundQuarterLabel(nextQEnd)} mungkin sudah rilis di Stockbit. Input manual supaya analisanya lebih update.`;
   }
+  const nextReportLabel = fundQuarterLabel(nextQEnd);
+  const nextReportDue = daysSinceNext >= 25;
 
   return {
     ticker, kind, kindAuto, score, earned, maxPts, pillars, label: fundLabel(score),
@@ -2965,7 +2978,7 @@ async function fundAnalyze(ticker, kindChoice){
     roe, margin, revYoY, niYoY, der, cashQ,
     per, pbv, perMed: median(perHist), pbvMed: median(pbvHist), perPct, pbvPct, valPct, valStatus,
     gate, cycleNote, rsi, high52, prevRec, delta, trend, scored, trendComparable, weeklyTrend, supportLevels, eps, bvps, perHist, pbvHist,
-    saran, saranCls, saranText, allowDca, warnings, fxNote, newReportHint
+    saran, saranCls, saranText, allowDca, warnings, fxNote, newReportHint, nextReportLabel, nextReportDue, dataLimited
   };
 }
 
@@ -2989,9 +3002,10 @@ function fundRenderResult(r){
         <b>${r.saran}</b><br>${r.saranText}
         ${r.gate.length ? `<ul class="gate-list">${r.gate.map(g => `<li>${g}</li>`).join('')}</ul>` : ''}
       </div>
+      ${(() => { const w = fundWaitingFor(r, null); return w.length ? `<div class="fund-pillar"><div class="fund-pillar-head"><span>Yang ditunggu supaya saran berubah</span></div><ul class="gate-list" style="margin:0; color:var(--text-secondary);">${w.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''; })()}
 
       <div class="stat-grid" style="margin-bottom:14px;">
-        <div class="stat"><div class="k">Skor kualitas bisnis</div><div class="v" style="color:${r.label.color};">${r.score.toFixed(1)} / 10 &middot; ${r.label.text}</div></div>
+        <div class="stat"><div class="k">Skor kualitas bisnis</div><div class="v" style="color:${r.label.color};">${r.score.toFixed(1)} / 10 &middot; ${r.label.text}</div><div class="k" style="margin:4px 0 0;">dari ${r.scored} metrik${r.dataLimited ? ' &middot; data belum lengkap' : ''}</div></div>
         <div class="stat"><div class="k">Tren skor</div><div class="v" style="font-size:12px; font-family:var(--sans); font-weight:500; color:${trendColor};">${trendTxt}</div></div>
         <div class="stat"><div class="k">Valuasi vs sejarahnya</div><div class="v" style="color:${valColor};">${r.valStatus ? r.valStatus.toUpperCase() : 'Belum bisa dinilai'}</div></div>
         <div class="stat"><div class="k">Gerbang anti-pucuk</div><div class="v" style="color:${r.gate.length ? 'var(--red)' : 'var(--green)'};">${r.gate.length ? r.gate.length + ' tanda pucuk' : 'Aman'}</div></div>
@@ -3046,6 +3060,10 @@ async function fundSaveHistory(r){
     roe: r.roe ?? null, niYoY: r.niYoY ?? null, revYoY: r.revYoY ?? null,
     per: r.per ?? null, pbv: r.pbv ?? null,
     source: r.sourceManual ? 'manual' : 'yahoo',
+    weeklyTrend: r.weeklyTrend || 'unknown', trend: r.trend || null, trendComparable: !!r.trendComparable,
+    supportLevels: (r.supportLevels || []).slice(0,3).map(v => Math.round(v)),
+    eps: r.eps ?? null, bvps: r.bvps ?? null, gates: r.gate,
+    nextReportLabel: r.nextReportLabel || null, nextReportDue: !!r.nextReportDue,
     savedDate: new Date().toISOString().slice(0,10),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
@@ -3163,40 +3181,124 @@ function fundRenderManualList(){
 }
 
 // ---------- Riwayat & tren ----------
+// Daftar syarat yang harus berubah supaya saran berganti
+function fundWaitingFor(r, a){
+  const w = [];
+  if((r.scored ?? 99) < 5) w.push(r.kind === 'bank' ? 'Input CAR, NPL, dan LDR lewat input laporan kuartal' : 'Input arus kas operasi lewat input laporan kuartal');
+  if(r.trend === 'memburuk' && r.trendComparable) w.push('Skor berhenti turun di laporan berikutnya');
+  else if(r.score < 6) w.push(`Skor naik ke 6 atau lebih${r.nextReportLabel ? ' di laporan ' + r.nextReportLabel : ''}`);
+  if(r.weeklyTrend === 'bearish') w.push('Weekly berbalik naik (EMA20 di atas EMA50)');
+  if((r.gate?.length || 0) > 0 || r.valStatus === 'mahal') w.push('Harga turun keluar dari area pucuk/mahal');
+  if(a && a.hasModal && a.maxAddLot <= 0) w.push('Ruang alokasi: posisi sudah di batas kategori');
+  if(r.nextReportDue && r.nextReportLabel) w.push(`Laporan ${r.nextReportLabel} mungkin sudah rilis: input lalu cek ulang`);
+  return w;
+}
+
+// Bentuk ulang hasil analisa dari catatan riwayat, supaya kartu bisa dihitung tanpa ambil data lagi
+function fundLiteFromHistory(L){
+  return {
+    ticker: L.ticker, kind: L.kind, price: L.price, score: Number(L.score), scored: L.scored,
+    trend: L.trend || null, trendComparable: !!L.trendComparable, niYoY: L.niYoY,
+    weeklyTrend: L.weeklyTrend || 'unknown', gate: L.gates || new Array(L.gateCount || 0).fill(''),
+    valStatus: L.valStatus, supportLevels: L.supportLevels || [], eps: L.eps, bvps: L.bvps,
+    perHist: [], pbvHist: [], nextReportLabel: L.nextReportLabel, nextReportDue: L.nextReportDue
+  };
+}
+
+const FUND_RANK = { 'v-strong':0, 'v-expensive':2, 'v-mid':3, 'v-breakdown':4 };
+const FUND_BADGE = { 'v-strong':'status-closed-win', 'v-mid':'status-open', 'v-expensive':'status-partial', 'v-breakdown':'status-closed-loss' };
+
 function fundRenderHistory(){
   const box = document.getElementById('fund-history-list');
+  const sumBox = document.getElementById('fund-portfolio-summary');
   if(!box) return;
   if(fundHistoryCache.length === 0){
     box.innerHTML = '<div class="empty">Belum ada riwayat. Setiap analisa otomatis tersimpan per kuartal, jadi trennya terbentuk sendiri dari waktu ke waktu.</div>';
+    if(sumBox) sumBox.innerHTML = '';
     return;
   }
   const groups = {};
   fundHistoryCache.forEach(h => { (groups[h.ticker] = groups[h.ticker] || []).push(h); });
+  const today = new Date().toISOString().slice(0,10);
+
   const list = Object.entries(groups).map(([ticker, recs]) => {
     recs.sort((a,b) => a.period.localeCompare(b.period));
-    return { ticker, recs, latest: recs[recs.length-1] };
-  }).sort((a,b) => (b.latest.savedDate || '').localeCompare(a.latest.savedDate || ''));
+    // catatan terbaru = kuartal terbaru, kalau sama ambil yang terakhir dicek
+    const latest = recs.slice().sort((a,b) => a.period.localeCompare(b.period) || (a.savedDate||'').localeCompare(b.savedDate||'')).pop();
+    const lite = fundLiteFromHistory(latest);
+    const pos = fundPositionsCache.find(x => x.id === ticker);
+    const a = (pos && latest.price) ? fundPositionAnalysis(lite, pos) : null;
+    const cls = a ? a.cls : latest.saranCls;
+    const rank = (!a && latest.saran === 'Boleh tambah porsi kecil') ? 1 : (FUND_RANK[cls] ?? 9);
+    const label = a ? a.title : latest.saran;
+    const age = latest.savedDate ? fundDaysBetween(latest.savedDate, today) : null;
+    return { ticker, recs, latest, lite, pos, a, cls, rank, label, age, waiting: fundWaitingFor(lite, a) };
+  }).sort((x, y) =>
+    x.rank - y.rank
+    || ((x.latest.valStatus === 'murah' ? 0 : 1) - (y.latest.valStatus === 'murah' ? 0 : 1))
+    || (Number(y.latest.score) - Number(x.latest.score)));
+
+  // --- Ringkasan portofolio (posisi yang sudah pernah dicek) ---
+  if(sumBox){
+    const held = list.filter(g => g.a);
+    const unchecked = fundPositionsCache.filter(p => !groups[p.id]).map(p => p.id);
+    if(held.length === 0 && unchecked.length === 0){
+      sumBox.innerHTML = '';
+    } else {
+      const totalCost = held.reduce((t,g) => t + g.a.cost, 0);
+      const totalValue = held.reduce((t,g) => t + g.a.value, 0);
+      const pl = totalValue - totalCost, plPct = totalCost > 0 ? pl/totalCost*100 : 0;
+      const buckets = { boleh:[], tahan:[], pantau:[], lepas:[] };
+      let dana1 = 0;
+      held.forEach(g => {
+        if(g.a.allowAdd){ buckets.boleh.push(g.ticker); const t = g.a.plan[0]; if(t && t.lot) dana1 += t.lot*100*t.price; }
+        else if(g.a.cls === 'v-breakdown') buckets.lepas.push(g.ticker);
+        else if(g.a.cls === 'v-mid') buckets.pantau.push(g.ticker);
+        else buckets.tahan.push(g.ticker);
+      });
+      const chip = (txt, list, color) => list.length ? `<span class="trend-chip" style="color:${color};">${txt}: ${list.join(', ')}</span>` : '';
+      sumBox.innerHTML = `
+        <div class="fund-pillar" style="margin-bottom:12px;">
+          <div class="fund-pillar-head"><span>Ringkasan posisi</span><span style="font-family:var(--mono); color:var(--text-secondary);">${held.length} emiten</span></div>
+          <div class="fund-metric"><span>Total modal</span><span class="val">${fundBig(totalCost)}</span></div>
+          <div class="fund-metric"><span>Nilai (harga saat terakhir dicek)</span><span class="val">${fundBig(totalValue)}</span></div>
+          <div class="fund-metric"><span>Floating P/L</span><span class="val" style="color:${pl >= 0 ? 'var(--green)' : 'var(--red)'};">${fundPct(plPct)} &middot; ${fundBig(pl)}</span></div>
+          <div class="fund-metric"><span>Dana kalau semua tahap 1 dijalankan</span><span class="val">${dana1 > 0 ? fundBig(dana1) : '-'}</span></div>
+          <div class="trend-row">
+            ${chip('Boleh tambah', buckets.boleh, 'var(--green)')}
+            ${chip('Tahan', buckets.tahan, 'var(--blue)')}
+            ${chip('Pantau', buckets.pantau, 'var(--amber)')}
+            ${chip('Pertimbangkan lepas', buckets.lepas, 'var(--red)')}
+            ${chip('Belum dicek', unchecked, 'var(--text-muted)')}
+          </div>
+        </div>`;
+    }
+  }
 
   box.innerHTML = list.map(g => {
     const L = g.latest;
-    const lab = fundLabel(L.score);
-    const badge = { 'v-strong':'status-closed-win', 'v-mid':'status-open', 'v-expensive':'status-partial', 'v-breakdown':'status-closed-loss' }[L.saranCls] || 'status-open';
-    return `<div class="j-entry">
+    const lab = fundLabel(Number(L.score));
+    const a = g.a;
+    let posHtml = '';
+    if(a){
+      const t = a.plan[0];
+      posHtml = `
+        <div class="fund-hint" style="margin:0 0 6px;">Posisi ${fmtNum(a.lot)} lot @ ${fmtNum(a.avg)} &middot; <span style="color:${a.plPct >= 0 ? 'var(--green)' : 'var(--red)'};">${fundPct(a.plPct)}</span>${a.bepNeed > 0 ? ` &middot; butuh naik <b>+${a.bepNeed.toFixed(1)}%</b> untuk balik modal` : ''}</div>
+        ${a.allowAdd && t && t.lot ? `<div class="fund-hint" style="margin:0 0 6px;"><b>Kalau tambah tahap 1:</b> +${fmtNum(t.lot)} lot di ${fmtNum(t.price)} &middot; dana <b>${fundBig(t.lot*100*t.price)}</b> &middot; rata-rata ${fmtNum(a.avg)} &rarr; <b>${fmtNum(t.newAvg)}</b> &middot; balik modal butuh <b>+${t.bep.toFixed(1)}%</b></div>` : ''}
+        ${a.allowAdd && t && !t.lot ? `<div class="fund-hint" style="margin:0 0 6px;"><b>Kalau tambah:</b> isi total modal aktif di tab Batas Posisi untuk menghitung jumlah lot dan dananya.</div>` : ''}`;
+    }
+    return `<div class="j-entry fund-card">
       <div class="j-top">
-        <div><span class="j-ticker">${g.ticker}</span><span class="j-date" style="margin-left:8px;">${FUND_KIND_LABEL[L.kind] || ''} &middot; dicek ${L.savedDate || '-'}</span></div>
-        <span class="j-status ${badge}">${L.saran}</span>
+        <div><span class="j-ticker">${g.ticker}</span><span class="j-date" style="margin-left:8px;">${FUND_KIND_LABEL[L.kind] || ''}</span></div>
+        <span class="j-status ${FUND_BADGE[g.cls] || 'status-open'}">${g.label}</span>
       </div>
       <div class="trend-row">
-        ${g.recs.map(h => `<span class="trend-chip" style="color:${fundLabel(h.score).color};">${fundQuarterLabel(h.period)}: ${Number(h.score).toFixed(1)}</span>`).join('<span style="color:var(--text-muted); font-size:11px; align-self:center;">→</span>')}
+        ${g.recs.map(h => `<span class="trend-chip" style="color:${fundLabel(Number(h.score)).color};">${fundQuarterLabel(h.period)}: ${Number(h.score).toFixed(1)}</span>`).join('<span style="color:var(--text-muted); font-size:11px; align-self:center;">→</span>')}
       </div>
-      ${(() => { const ps = fundPositionsCache.find(x => x.id === g.ticker); if(!ps || !L.price) return '';
-        const pl = (L.price/ps.avgPrice - 1)*100;
-        return `<div class="fund-hint" style="margin:0 0 8px;">Posisi: ${fmtNum(ps.lot)} lot @ ${fmtNum(ps.avgPrice)} &middot; <span style="color:${pl >= 0 ? 'var(--green)' : 'var(--red)'};">${fundPct(pl)}</span> (harga saat cek)</div>`; })()}
-      <div class="j-grid">
-        <div><div class="k">Skor</div><div class="v" style="color:${lab.color};">${Number(L.score).toFixed(1)} ${lab.text}</div></div>
-        <div><div class="k">Valuasi</div><div class="v">${L.valStatus || '-'}</div></div>
-        <div><div class="k">Anti-pucuk</div><div class="v" style="color:${L.gateCount ? 'var(--red)' : 'var(--green)'};">${L.gateCount ? L.gateCount + ' tanda' : 'aman'}</div></div>
-        <div><div class="k">Harga saat cek</div><div class="v">${L.price ? fmtNum(L.price) : '-'}</div></div>
+      ${posHtml}
+      ${g.waiting.length ? `<div class="fund-hint" style="margin:0 0 6px;"><b>Menunggu:</b> ${g.waiting.join(' &middot; ')}</div>` : (a ? '<div class="fund-hint" style="margin:0 0 6px; color:var(--green);">Semua syarat terpenuhi.</div>' : '')}
+      <div class="fund-hint" style="margin:0 0 10px; ${g.age != null && g.age > 7 ? 'color:var(--amber);' : 'color:var(--text-muted);'}">
+        ${g.age == null ? '' : g.age === 0 ? 'Dicek hari ini' : `Dicek ${g.age} hari lalu`} &middot; harga ${L.price ? fmtNum(L.price) : '-'} &middot; skor ${Number(L.score).toFixed(1)} <span style="color:${lab.color};">${lab.text}</span>${L.scored ? ` (${L.scored} metrik)` : ''} &middot; valuasi ${L.valStatus || '-'}${g.age != null && g.age > 7 ? ' &middot; angka mungkin sudah berubah, cek ulang dulu' : ''}
       </div>
       <div class="j-actions">
         <button data-fund-recheck="${g.ticker}" data-kind="${L.kindAuto ? 'auto' : L.kind}">Cek ulang</button>
@@ -3219,6 +3321,36 @@ function fundRenderHistory(){
     catch(e){ alert('Gagal menghapus: ' + e.message); }
   }));
 }
+
+// Cek ulang semua emiten di riwayat, satu per satu dengan jeda supaya proxy tidak kena limit
+let fundBatchRunning = false;
+document.getElementById('btn-fund-recheck-all').addEventListener('click', async () => {
+  if(fundBatchRunning) return;
+  const latestByTicker = {};
+  fundHistoryCache.forEach(h => { if(!latestByTicker[h.ticker] || h.period > latestByTicker[h.ticker].period) latestByTicker[h.ticker] = h; });
+  const items = Object.values(latestByTicker);
+  if(items.length === 0) return;
+  if(!confirm(`Cek ulang ${items.length} emiten? Butuh sekitar ${Math.ceil(items.length*20/60)} menit. Biarkan halaman tetap terbuka.`)) return;
+  fundBatchRunning = true;
+  const btn = document.getElementById('btn-fund-recheck-all');
+  const analyzeBtn = document.getElementById('btn-fund-analyze');
+  btn.disabled = true; analyzeBtn.disabled = true;
+  const failed = [];
+  for(let i=0; i<items.length; i++){
+    const h = items[i];
+    const prefix = `Mengecek ${h.ticker} (${i+1}/${items.length})`;
+    btn.textContent = prefix + '...';
+    try{
+      const r = await fundAnalyze(h.ticker, h.kindAuto ? 'auto' : h.kind, (t) => { btn.textContent = prefix + ': ' + t.toLowerCase(); });
+      await fundSaveHistory(r);
+    }catch(e){ failed.push(h.ticker); }
+    if(i < items.length-1){ btn.textContent = prefix + ': jeda sebentar...'; await new Promise(res => setTimeout(res, 3000)); }
+  }
+  btn.textContent = failed.length ? `Selesai. Gagal: ${failed.join(', ')} (coba cek ulang satu per satu)` : `Selesai, ${items.length} emiten diperbarui`;
+  analyzeBtn.disabled = false; analyzeBtn.textContent = 'Analisa fundamental';
+  fundBatchRunning = false;
+  setTimeout(() => { btn.textContent = 'Cek ulang semua'; btn.disabled = false; }, 6000);
+});
 
 // ---------- Posisi yang sudah dipegang ----------
 let fundPosEditing = false;
@@ -3272,7 +3404,11 @@ function fundPositionAnalysis(r, pos){
   // Saran khusus untuk posisi ini
   let cls, title, text, allowAdd = false;
   const reasons = [];
-  if(r.score < 4 || (r.trend === 'memburuk' && r.trendComparable)){
+  const limited = (r.scored ?? 99) < 5;
+  if(limited && r.score < 6 && !(r.trend === 'memburuk' && r.trendComparable)){
+    cls = 'v-mid'; title = 'Jangan tambah dulu, lengkapi data';
+    text = `Skor ${r.score.toFixed(1)} baru dari ${r.scored} metrik. Belum cukup untuk menyarankan cut loss maupun menambah. Lengkapi datanya lewat input laporan kuartal, lalu cek ulang.`;
+  } else if(r.score < 4 || (r.trend === 'memburuk' && r.trendComparable)){
     cls = 'v-breakdown'; title = plPct < 0 ? 'Jangan average down, pertimbangkan cut loss' : 'Jangan tambah, pertimbangkan ambil untung';
     text = 'Fundamentalnya lemah atau sedang memburuk. Menambah di kondisi ini memperbesar posisi di bisnis yang belum terbukti pulih.';
   } else if(r.score < 6 && plPct < 0){
