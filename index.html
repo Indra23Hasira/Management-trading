@@ -70,6 +70,23 @@
   .status-partial{background:var(--blue-dim); color:var(--blue);}
   .status-closed-win{background:var(--green-dim); color:var(--green);}
   .status-closed-loss{background:var(--red-dim); color:var(--red);}
+  .tabs{overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tab{flex:1 0 auto;}
+  .btn.ghost{background:transparent; border:1px solid var(--border); color:var(--text-secondary); font-weight:500;}
+  .fund-summary{cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text-muted); font-weight:600; list-style:none;}
+  .fund-summary::-webkit-details-marker{display:none;}
+  .fund-summary::after{content:' +'; color:var(--green);}
+  details[open] .fund-summary::after{content:' \2212';}
+  .fund-hint{font-size:12px; color:var(--text-secondary); line-height:1.5; margin:12px 0;}
+  .fund-pillar{background:var(--surface-2); border-radius:8px; padding:10px 12px; margin-bottom:8px;}
+  .fund-pillar-head{display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:6px;}
+  .fund-metric{display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--text-secondary); padding:3px 0;}
+  .fund-metric .val{font-family:var(--mono); color:var(--text-primary); white-space:nowrap;}
+  .fund-dots{font-family:var(--mono); letter-spacing:1px;}
+  .trend-row{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0;}
+  .trend-chip{font-family:var(--mono); font-size:11px; padding:3px 8px; border-radius:6px; background:var(--surface-2);}
+  .gate-list{margin:6px 0 0; padding-left:18px; font-size:12px; line-height:1.6;}
   .dca-verdict{padding:14px 16px; border-radius:10px; margin-bottom:14px; font-size:13px; line-height:1.5;}
   .dca-verdict.v-strong{background:var(--green-dim); border:1px solid var(--green); color:#B8F5DD;}
   .dca-verdict.v-mid{background:var(--amber-dim); border:1px solid var(--amber); color:#FFD98A;}
@@ -158,6 +175,7 @@
     <div class="tab" data-tab="calc">Kalkulator</div>
     <div class="tab" data-tab="journal">Jurnal Trading</div>
     <div class="tab" data-tab="dividen">Simulasi Dividen</div>
+    <div class="tab" data-tab="fund">Cek Fundamental</div>
     <div class="tab" data-tab="dca">Timing DCA</div>
     <div class="tab" data-tab="sizing">Batas Posisi</div>
     <div class="tab" data-tab="aturan">Aturan Keuangan</div>
@@ -289,6 +307,76 @@
     <div class="card">
       <p class="card-title">Simulasi tersimpan</p>
       <div id="dv-saved-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-fund">
+    <div class="card">
+      <p class="card-title">Cek fundamental emiten</p>
+      <div class="field-row">
+        <div class="field"><label>Ticker</label><input type="text" id="fund-ticker" placeholder="cth. BMRI" style="text-transform:uppercase;"></div>
+        <div class="field"><label>Jenis bisnis</label>
+          <select id="fund-kind">
+            <option value="auto">Otomatis</option>
+            <option value="umum">Umum</option>
+            <option value="bank">Bank</option>
+            <option value="komoditas">Komoditas / Siklikal</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn" id="btn-fund-analyze">Analisa fundamental</button>
+      <div id="fund-err-box"></div>
+    </div>
+    <div id="fund-result-box" style="display:none;"></div>
+
+    <div class="card">
+      <details id="fund-manual-details">
+        <summary class="fund-summary">Input laporan kuartal (dari Stockbit)</summary>
+        <p class="fund-hint">Isi angka <b>per kuartal</b> (tampilan Quarterly di Stockbit), bukan kumulatif tahun berjalan. Kosongkan yang tidak ada. Angka yang kamu isi diprioritaskan di atas data Yahoo untuk kuartal yang sama.</p>
+        <div class="field-row">
+          <div class="field"><label>Ticker</label><input type="text" id="fm-ticker" style="text-transform:uppercase;"></div>
+          <div class="field"><label>Periode</label>
+            <div style="display:flex; gap:6px;">
+              <select id="fm-q"><option value="1">Q1</option><option value="2">Q2</option><option value="3">Q3</option><option value="4">Q4</option></select>
+              <input type="number" id="fm-year" inputmode="numeric" placeholder="2026">
+            </div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Mata uang laporan</label>
+            <select id="fm-ccy"><option value="IDR">Rupiah (IDR)</option><option value="USD">Dolar (USD)</option></select>
+          </div>
+          <div class="field"><label>Satuan angka</label>
+            <select id="fm-unit"><option value="miliar">Miliar</option><option value="juta">Juta</option><option value="triliun">Triliun</option><option value="penuh">Angka penuh</option></select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Pendapatan</label><input type="number" id="fm-rev" step="any" inputmode="decimal"></div>
+          <div class="field"><label>Laba bersih (atribusi)</label><input type="number" id="fm-ni" step="any" inputmode="decimal"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Arus kas operasi</label><input type="number" id="fm-ocf" step="any" inputmode="decimal"></div>
+          <div class="field"><label>Jumlah saham (juta lembar)</label><input type="number" id="fm-shares" step="any" inputmode="decimal" placeholder="opsional"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Total ekuitas</label><input type="number" id="fm-eq" step="any" inputmode="decimal"></div>
+          <div class="field"><label>Total liabilitas</label><input type="number" id="fm-liab" step="any" inputmode="decimal"></div>
+        </div>
+        <p class="fund-hint" style="margin-top:4px;">Khusus bank (dalam %):</p>
+        <div class="field-row" style="grid-template-columns:1fr 1fr 1fr;">
+          <div class="field"><label>CAR</label><input type="number" id="fm-car" step="any" inputmode="decimal"></div>
+          <div class="field"><label>NPL gross</label><input type="number" id="fm-npl" step="any" inputmode="decimal"></div>
+          <div class="field"><label>LDR</label><input type="number" id="fm-ldr" step="any" inputmode="decimal"></div>
+        </div>
+        <div id="fm-err-box"></div>
+        <button class="btn" id="btn-fm-save">Simpan laporan kuartal</button>
+        <div id="fm-list" style="margin-top:14px;"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <p class="card-title">Riwayat &amp; tren fundamental</p>
+      <div id="fund-history-list"></div>
     </div>
   </div>
 
@@ -615,6 +703,7 @@ auth.onAuthStateChanged(user => {
     subscribeAturan();
     subscribeRencana();
     subscribeDca();
+    subscribeFund();
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
@@ -625,6 +714,8 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeAturan){ unsubscribeAturan(); unsubscribeAturan = null; }
     if(unsubscribeRencana){ unsubscribeRencana(); unsubscribeRencana = null; }
     if(unsubscribeDca){ unsubscribeDca(); unsubscribeDca = null; }
+    if(unsubscribeFundHistory){ unsubscribeFundHistory(); unsubscribeFundHistory = null; }
+    if(unsubscribeFundManual){ unsubscribeFundManual(); unsubscribeFundManual = null; }
     rencanaAutoRefreshDone = false;
   }
 });
@@ -680,6 +771,7 @@ document.querySelectorAll('.tab').forEach(t=>{
     document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     document.getElementById('panel-'+t.dataset.tab).classList.add('active');
+    t.scrollIntoView({ behavior:'smooth', block:'nearest', inline:'center' });
   });
 });
 
@@ -2430,6 +2522,687 @@ function renderDcaList(){
     document.getElementById('btn-dca-analyze').click();
     document.getElementById('dca-ticker').scrollIntoView({ behavior:'smooth', block:'center' });
   }));
+}
+
+// ==================== CEK FUNDAMENTAL ====================
+
+function fundHistoryRef(){ return db.collection('users').doc(currentUser.uid).collection('fund_history'); }
+function fundManualRef(){ return db.collection('users').doc(currentUser.uid).collection('fund_manual'); }
+
+const FUND_BANK = ['BBCA','BBRI','BMRI','BBNI','BRIS','BBTN','BNGA','BDMN','PNBN','BJBR','BJTM','MEGA','NISP','BTPS','ARTO','BBYB','AGRO','BNLI','BSIM','MAYA','BBKP','BTPN','BANK','BACA','BBHI','BGTG','BINA','BMAS','BNBA','BNII','BSWD','DNAR','MCOR','NOBU','PNBS','SDRA','AMAR','BABP','BCIC','BKSW','BVIC','INPC','MASB'];
+const FUND_KOMODITAS = ['ADRO','AADI','ADMR','PTBA','ITMG','HRUM','INDY','MEDC','ANTM','INCO','MDKA','TINS','BUMI','BYAN','DSSA','GEMS','KKGI','MBAP','DOID','ABMM','TOBA','BSSR','AMMN','BRMS','PSAB','NCKL','MBMA','NICL','ENRG','AALI','LSIP','SIMP','SSMS','TAPG','DSNG','INKP','TKIM','KRAS','TPIA','BRPT'];
+const FUND_KIND_LABEL = { umum:'Umum', bank:'Bank', komoditas:'Komoditas / Siklikal' };
+const FUND_UNIT = { penuh:1, juta:1e6, miliar:1e9, triliun:1e12 };
+
+let fundHistoryCache = [];
+let fundManualCache = [];
+let unsubscribeFundHistory = null;
+let unsubscribeFundManual = null;
+
+function fundCleanTicker(v){ return (v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function fundDetectKind(ticker){
+  if(FUND_BANK.includes(ticker)) return 'bank';
+  if(FUND_KOMODITAS.includes(ticker)) return 'komoditas';
+  return 'umum';
+}
+function fundQuarterLabel(date){
+  const [y,m] = date.split('-').map(Number);
+  return 'Q' + Math.ceil(m/3) + ' ' + y;
+}
+function fundQuarterEnd(q, year){
+  return year + '-' + ({1:'03-31',2:'06-30',3:'09-30',4:'12-31'})[q];
+}
+function fundDaysBetween(a, b){ return Math.round((new Date(b) - new Date(a)) / 86400000); }
+function fundBig(n){
+  if(n == null || !isFinite(n)) return '-';
+  const a = Math.abs(n), sign = n < 0 ? '-' : '';
+  if(a >= 1e12) return sign + 'Rp' + (a/1e12).toLocaleString('id-ID',{maximumFractionDigits:2}) + ' T';
+  if(a >= 1e9) return sign + 'Rp' + (a/1e9).toLocaleString('id-ID',{maximumFractionDigits:1}) + ' M';
+  if(a >= 1e6) return sign + 'Rp' + (a/1e6).toLocaleString('id-ID',{maximumFractionDigits:1}) + ' jt';
+  return sign + 'Rp' + Math.round(a).toLocaleString('id-ID');
+}
+function fundPct(n, d=1){ return (n == null || !isFinite(n)) ? '-' : (n>0?'+':'') + n.toFixed(d) + '%'; }
+function fundPlainPct(n, d=1){ return (n == null || !isFinite(n)) ? '-' : n.toFixed(d) + '%'; }
+function fundX(n, d=1){ return (n == null || !isFinite(n)) ? '-' : n.toFixed(d) + 'x'; }
+function fundLabel(score){
+  if(score < 4) return { text:'Buruk', color:'var(--red)', cls:'status-closed-loss' };
+  if(score < 6) return { text:'Sedang', color:'var(--amber)', cls:'status-open' };
+  if(score < 8) return { text:'Baik', color:'var(--green)', cls:'status-closed-win' };
+  return { text:'Sangat baik', color:'var(--green)', cls:'status-closed-win' };
+}
+
+// --- Ambil JSON dari Yahoo lewat rantai proxy yang sama dengan Timing DCA ---
+async function fundFetchJson(yahooUrl){
+  const enc = encodeURIComponent(yahooUrl);
+  const jinaTarget = yahooUrl.replace(/&/g, '%26');
+  const proxies = [
+    { url: `https://r.jina.ai/${jinaTarget}`, mode: 'jina' },
+    { url: `https://api.allorigins.win/raw?url=${enc}`, mode: 'plain' },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, mode: 'plain' },
+    { url: `https://corsproxy.io/?url=${enc}`, mode: 'plain' },
+    { url: `https://api.allorigins.win/get?url=${enc}`, mode: 'wrapped' }
+  ];
+  let lastErr = null;
+  for(const proxy of proxies){
+    try{
+      const controller = new AbortController();
+      const timeoutId = setTimeout(()=> controller.abort(), 12000);
+      const res = await fetch(proxy.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      if(proxy.mode === 'wrapped'){ const w = await res.json(); return JSON.parse(w.contents); }
+      if(proxy.mode === 'jina'){
+        const text = await res.text();
+        const i = text.indexOf('{');
+        if(i === -1) throw new Error('Format respons proxy tidak dikenali');
+        return JSON.parse(text.slice(i));
+      }
+      return await res.json();
+    }catch(e){ lastErr = e; }
+  }
+  throw new Error(lastErr ? (lastErr.name === 'AbortError' ? 'Semua proxy timeout (jaringan lambat/diblokir).' : lastErr.message) : 'Gagal mengambil data.');
+}
+
+const FUND_Q_TYPES = {
+  revenue:'quarterlyTotalRevenue', niCommon:'quarterlyNetIncomeCommonStockholders', ni:'quarterlyNetIncome',
+  equity:'quarterlyStockholdersEquity', liab:'quarterlyTotalLiabilitiesNetMinorityInterest',
+  ocf:'quarterlyOperatingCashFlow', shares:'quarterlyOrdinarySharesNumber'
+};
+const FUND_A_TYPES = {
+  revenue:'annualTotalRevenue', ni:'annualNetIncomeCommonStockholders', equity:'annualStockholdersEquity', shares:'annualOrdinarySharesNumber'
+};
+
+async function fundFetchStatements(ticker){
+  const types = [...Object.values(FUND_Q_TYPES), ...Object.values(FUND_A_TYPES)];
+  const p1 = Math.floor(Date.now()/1000) - 7*365*86400;
+  const p2 = Math.floor(Date.now()/1000);
+  const url = `https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${ticker}.JK?type=${encodeURIComponent(types.join(','))}&period1=${p1}&period2=${p2}`;
+  const data = await fundFetchJson(url);
+  const results = data?.timeseries?.result || [];
+  const byType = {};
+  let ccy = null;
+  results.forEach(r => {
+    const typ = r?.meta?.type?.[0];
+    if(!typ) return;
+    byType[typ] = (r[typ] || []).filter(Boolean).map(v => {
+      const c = v.currencyCode || v.reportedValue?.currencyCode;
+      if(c && !typ.endsWith('SharesNumber')) ccy = ccy || c;
+      return { date: v.asOfDate, value: v.reportedValue?.raw };
+    }).filter(v => v.date && v.value != null);
+  });
+  const toMap = (typesMap) => {
+    const map = {};
+    Object.entries(typesMap).forEach(([field, typ]) => {
+      (byType[typ] || []).forEach(v => {
+        map[v.date] = map[v.date] || { date: v.date };
+        map[v.date][field] = v.value;
+      });
+    });
+    return map;
+  };
+  const q = toMap(FUND_Q_TYPES);
+  Object.values(q).forEach(x => { if(x.niCommon != null) x.ni = x.niCommon; delete x.niCommon; });
+  const a = toMap(FUND_A_TYPES);
+  return { q, a, ccy: ccy || 'IDR' };
+}
+
+async function fundFetchUsdIdr(){
+  const data = await fundFetchJson('https://query1.finance.yahoo.com/v8/finance/chart/IDR=X?range=5d&interval=1d');
+  const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+  if(!price) throw new Error('Kurs USD/IDR tidak tersedia');
+  return price;
+}
+
+// Gabungkan data Yahoo dengan input manual Stockbit (manual diprioritaskan)
+function fundMergeManual(ticker, q, warnings, fx){
+  const sources = {};
+  const manual = fundManualCache.filter(m => m.ticker === ticker);
+  let bankRatios = null;
+  manual.forEach(m => {
+    const date = fundQuarterEnd(m.q, m.year);
+    const mult = FUND_UNIT[m.unit] || 1e9;
+    const row = q[date] = q[date] || { date };
+    const fields = { revenue:m.rev, ni:m.ni, ocf:m.ocf, equity:m.eq, liab:m.liab };
+    Object.entries(fields).forEach(([f, v]) => {
+      if(v == null || v === '' || !isFinite(v)) return;
+      const val = Number(v) * mult * ((m.ccy === 'USD') ? fx : 1);
+      const yahooVal = row[f];
+      if(yahooVal != null && row._fromYahoo && Math.abs(yahooVal) > 0){
+        const diff = Math.abs(val - yahooVal) / Math.abs(yahooVal) * 100;
+        if(diff > 5) warnings.push(`${fundQuarterLabel(date)} ${({revenue:'pendapatan',ni:'laba bersih',ocf:'arus kas operasi',equity:'ekuitas',liab:'liabilitas'})[f]}: input kamu beda ${diff.toFixed(0)}% dari data Yahoo. Cek lagi salah ketik atau satuan.`);
+      }
+      row[f] = val;
+      sources[date] = 'manual';
+    });
+    if(m.shares != null && m.shares !== '' && isFinite(m.shares)) row.shares = Number(m.shares) * 1e6;
+    if([m.car, m.npl, m.ldr].some(v => v != null && v !== '')){
+      if(!bankRatios || date > bankRatios.date) bankRatios = { date, car:m.car, npl:m.npl, ldr:m.ldr };
+    }
+  });
+  return { sources, bankRatios };
+}
+
+function fundScoreMetric(v, rules){
+  if(v == null || !isFinite(v)) return null;
+  for(const [test, pts] of rules) if(test(v)) return pts;
+  return 0;
+}
+
+function fundPercentile(arr, v){
+  if(!arr.length) return null;
+  return arr.filter(x => x <= v).length / arr.length * 100;
+}
+
+async function fundAnalyze(ticker, kindChoice){
+  const warnings = [];
+  const kind = kindChoice === 'auto' ? fundDetectKind(ticker) : kindChoice;
+  const kindAuto = kindChoice === 'auto';
+
+  const btn = document.getElementById('btn-fund-analyze');
+  const step = (t) => { btn.textContent = t; };
+  const pause = () => new Promise(r => setTimeout(r, 400));
+
+  step('Mengambil laporan keuangan...');
+  const st = await fundFetchStatements(ticker);
+  Object.values(st.q).forEach(r => r._fromYahoo = true);
+
+  let fx = 1, fxNote = null;
+  const needsFx = st.ccy === 'USD' || fundManualCache.some(m => m.ticker === ticker && m.ccy === 'USD');
+  if(needsFx){
+    step('Mengambil kurs USD/IDR...');
+    await pause();
+    fx = await fundFetchUsdIdr();
+    fxNote = `Laporan dalam USD, dikonversi ke rupiah pakai kurs sekarang (Rp${fmtNum(fx)}/USD).`;
+  }
+  const money = ['revenue','ni','equity','liab','ocf'];
+  if(st.ccy === 'USD'){
+    [...Object.values(st.q), ...Object.values(st.a)].forEach(r => money.forEach(f => { if(r[f] != null) r[f] *= fx; }));
+  }
+  const { sources, bankRatios } = fundMergeManual(ticker, st.q, warnings, fx);
+
+  // Yahoo sering melewatkan satu kuartal (biasanya Q3) untuk emiten IDX.
+  // Kalau laporan tahunan + 3 kuartal lain ada, kuartal yang hilang = tahunan - 3 kuartal lainnya.
+  Object.values(st.a).forEach(a => {
+    if(!a.date.endsWith('-12-31')) return;
+    const y = a.date.slice(0,4);
+    const qDates = [1,2,3,4].map(n => fundQuarterEnd(n, y));
+    ['ni','revenue'].forEach(f => {
+      if(a[f] == null) return;
+      const have = qDates.filter(d => st.q[d]?.[f] != null);
+      if(have.length !== 3) return;
+      const missing = qDates.find(d => st.q[d]?.[f] == null);
+      st.q[missing] = st.q[missing] || { date: missing };
+      st.q[missing][f] = a[f] - have.reduce((sum, d) => sum + st.q[d][f], 0);
+      st.q[missing]._derived = true;
+    });
+  });
+  const derivedQs = Object.values(st.q).filter(r => r._derived).map(r => fundQuarterLabel(r.date));
+  const quarters = Object.values(st.q).filter(r => r.ni != null || r.revenue != null).sort((a,b) => a.date.localeCompare(b.date));
+  if(quarters.length === 0) throw new Error('Data laporan keuangan tidak ditemukan untuk ticker ini. Coba input manual dari Stockbit.');
+  const latest = quarters[quarters.length-1];
+  const latestDate = latest.date;
+
+  // TTM: 4 kuartal terakhir harus berurutan (jarak ~3 bulan)
+  const last4 = quarters.slice(-4);
+  let contiguous = last4.length === 4;
+  const gapLabels = [];
+  for(let i=1; i<last4.length; i++){
+    const d = fundDaysBetween(last4[i-1].date, last4[i].date);
+    if(d < 80 || d > 100){
+      contiguous = false;
+      let [gy, gm] = last4[i-1].date.split('-').map(Number);
+      let gq = Math.ceil(gm/3) + 1; if(gq > 4){ gq = 1; gy++; }
+      gapLabels.push('Q' + gq + ' ' + gy);
+    }
+  }
+  if(last4.length === 4 && !contiguous){
+    warnings.push(`Data ${gapLabels.join(', ')} tidak tersedia, jadi angka 12 bulan terakhir pakai laporan tahunan. Isi kuartal itu lewat input manual supaya lebih akurat.`);
+  }
+  if(derivedQs.length){
+    warnings.push(`Data Yahoo tidak punya ${derivedQs.join(', ')}, jadi angkanya dihitung dari laporan tahunan dikurangi tiga kuartal lainnya.`);
+  }
+  const sum4 = (f) => contiguous && last4.every(r => r[f] != null) ? last4.reduce((s,r) => s + r[f], 0) : null;
+  const annualSorted = Object.values(st.a).sort((a,b) => a.date.localeCompare(b.date));
+  const latestAnnual = annualSorted[annualSorted.length-1];
+  let ttmNI = sum4('ni'), ttmRev = sum4('revenue');
+  const ttmOCF = sum4('ocf');
+  let ttmBasis = 'TTM 4 kuartal';
+  if(ttmNI == null && latestAnnual?.ni != null){ ttmNI = latestAnnual.ni; ttmRev = latestAnnual.revenue ?? null; ttmBasis = 'tahunan ' + latestAnnual.date.slice(0,4); }
+
+  const [ly, lm, ld] = latestDate.split('-');
+  const yearAgo = st.q[(Number(ly)-1) + '-' + lm + '-' + ld];
+  const equity = latest.equity ?? quarters.slice().reverse().find(r => r.equity != null)?.equity ?? null;
+  const avgEquity = (equity != null && yearAgo?.equity != null) ? (equity + yearAgo.equity)/2 : equity;
+  const shares = latest.shares ?? quarters.slice().reverse().find(r => r.shares != null)?.shares ?? latestAnnual?.shares ?? null;
+  const liab = latest.liab ?? null;
+
+  const roe = (ttmNI != null && avgEquity > 0) ? ttmNI/avgEquity*100 : null;
+  const margin = (ttmNI != null && ttmRev > 0) ? ttmNI/ttmRev*100 : null;
+  const growth = (now, then) => {
+    if(now == null || then == null) return null;
+    if(then <= 0) return now > 0 ? 999 : null; // berbalik untung
+    return (now/then - 1)*100;
+  };
+  const revYoY = growth(latest.revenue, yearAgo?.revenue);
+  const niYoY = growth(latest.ni, yearAgo?.ni);
+  const der = (liab != null && equity > 0) ? liab/equity : null;
+  const cashQ = (ttmOCF != null && ttmNI > 0) ? ttmOCF/ttmNI : null;
+
+  // --- Skor per pilar ---
+  const G = (v) => fundScoreMetric(v, [[x => x >= 10, 2], [x => x >= 0, 1]]);
+  const pillars = [];
+  if(kind === 'bank'){
+    pillars.push({ name:'Profitabilitas', metrics:[
+      { label:'ROE', val:fundPlainPct(roe), pts:fundScoreMetric(roe, [[x=>x>=15,2],[x=>x>=10,1]]), hint:'bagus ≥15%' }
+    ]});
+    pillars.push({ name:'Pertumbuhan', metrics:[
+      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=0,1]]), hint:'bagus ≥8%' },
+      { label:'Laba bersih YoY', val:niYoY===999?'berbalik untung':fundPct(niYoY), pts:G(niYoY), hint:'bagus ≥10%' }
+    ]});
+    const br = bankRatios || {};
+    const num = (v) => (v == null || v === '') ? null : Number(v);
+    const car = num(br.car), npl = num(br.npl), ldr = num(br.ldr);
+    pillars.push({ name:'Kesehatan bank' + (bankRatios ? ` (input ${fundQuarterLabel(bankRatios.date)})` : ''), metrics:[
+      { label:'CAR', val:fundPlainPct(car), pts:fundScoreMetric(car, [[x=>x>=18,2],[x=>x>=14,1]]), hint:'bagus ≥18%' },
+      { label:'NPL gross', val:fundPlainPct(npl), pts:fundScoreMetric(npl, [[x=>x<=2.5,2],[x=>x<=4,1]]), hint:'bagus ≤2,5%' },
+      { label:'LDR', val:fundPlainPct(ldr), pts:fundScoreMetric(ldr, [[x=>x>=78&&x<=92,2],[x=>x>=70&&x<=100,1]]), hint:'ideal 78–92%' }
+    ]});
+    if(!bankRatios) warnings.push('CAR, NPL, dan LDR belum diinput. Skor bank sementara hanya dari profitabilitas dan pertumbuhan. Isi lewat "Input laporan kuartal".');
+  } else {
+    pillars.push({ name:'Profitabilitas', metrics:[
+      { label:'ROE', val:fundPlainPct(roe), pts:fundScoreMetric(roe, [[x=>x>=15,2],[x=>x>=8,1]]), hint:'bagus ≥15%' },
+      { label:'Margin laba bersih', val:fundPlainPct(margin), pts:fundScoreMetric(margin, [[x=>x>=10,2],[x=>x>=4,1]]), hint:'bagus ≥10%' }
+    ]});
+    pillars.push({ name:'Pertumbuhan', metrics:[
+      { label:'Pendapatan YoY', val:fundPct(revYoY), pts:fundScoreMetric(revYoY, [[x=>x>=8,2],[x=>x>=0,1]]), hint:'bagus ≥8%' },
+      { label:'Laba bersih YoY', val:niYoY===999?'berbalik untung':fundPct(niYoY), pts:G(niYoY), hint:'bagus ≥10%' }
+    ]});
+    pillars.push({ name:'Kesehatan neraca', metrics:[
+      { label:'DER (liabilitas/ekuitas)', val:fundX(der,2), pts:fundScoreMetric(der, [[x=>x<=1,2],[x=>x<=2,1]]), hint:'bagus ≤1x' }
+    ]});
+    pillars.push({ name:'Kualitas laba', metrics:[
+      { label:'Arus kas operasi / laba', val:fundX(cashQ,2), pts:fundScoreMetric(cashQ, [[x=>x>=0.8,2],[x=>x>=0.5,1]]), hint:'bagus ≥0,8x' }
+    ]});
+    if(cashQ == null) warnings.push('Arus kas operasi tidak tersedia di Yahoo untuk emiten ini, jadi pilar kualitas laba belum dinilai. Isi arus kas operasi 4 kuartal terakhir lewat input manual untuk melengkapi.');
+  }
+  let earned = 0, maxPts = 0, scored = 0;
+  pillars.forEach(p => p.metrics.forEach(m => { if(m.pts != null){ earned += m.pts; maxPts += 2; scored++; } }));
+  if(scored < 3) throw new Error('Data fundamental yang tersedia terlalu sedikit untuk dinilai (kurang dari 3 metrik). Coba input laporan kuartal manual dari Stockbit.');
+  const score = Math.max(1, Math.round(earned/maxPts*100)/10);
+
+  // --- Harga & valuasi ---
+  step('Mengambil riwayat harga...');
+  await pause();
+  const weekly = await fundFetchCandlesSafe(ticker, '1wk', '5y');
+  await pause();
+  step('Mengecek posisi harga...');
+  const daily = await fundFetchCandlesSafe(ticker, '1d', '1y');
+  if(!daily) throw new Error('Gagal mengambil data harga harian. Tunggu sebentar lalu coba lagi.');
+  const price = daily[daily.length-1].close;
+
+  const eps = (ttmNI != null && shares > 0) ? ttmNI/shares : null;
+  const bvps = (equity > 0 && shares > 0) ? equity/shares : null;
+  const per = (eps > 0) ? price/eps : null;
+  const pbv = bvps ? price/bvps : null;
+
+  // Riwayat PER/PBV mingguan berbasis laporan tahunan yang sudah rilis saat itu (anggap rilis 90 hari setelah tutup buku)
+  const perHist = [], pbvHist = [];
+  if(weekly){
+    weekly.forEach(c => {
+      const avail = annualSorted.filter(a => fundDaysBetween(a.date, c.date) >= 90 && a.shares > 0);
+      const a = avail[avail.length-1];
+      if(!a) return;
+      if(a.ni > 0) perHist.push(c.close / (a.ni / a.shares));
+      if(a.equity > 0) pbvHist.push(c.close / (a.equity / a.shares));
+    });
+  }
+  const perPct = (per != null && perHist.length >= 26) ? fundPercentile(perHist, per) : null;
+  const pbvPct = (pbv != null && pbvHist.length >= 26) ? fundPercentile(pbvHist, pbv) : null;
+  let valPct = null;
+  if(kind === 'komoditas') valPct = pbvPct;            // PER menipu di puncak siklus
+  else if(perPct != null && pbvPct != null) valPct = (perPct + pbvPct)/2;
+  else valPct = perPct ?? pbvPct;
+  const median = (arr) => { if(!arr.length) return null; const s = arr.slice().sort((a,b)=>a-b); return s[Math.floor(s.length/2)]; };
+  let valStatus = null;
+  if(valPct != null) valStatus = valPct <= 35 ? 'murah' : valPct <= 65 ? 'wajar' : 'mahal';
+
+  // --- Gerbang anti-pucuk ---
+  const gate = [];
+  if(valPct != null && valPct >= 70) gate.push(`Valuasi di zona atas sejarahnya sendiri (lebih mahal dari ${valPct.toFixed(0)}% periode 5 tahun terakhir).`);
+  const high52 = Math.max(...daily.map(c => c.high));
+  const distHigh = (high52 - price)/high52*100;
+  if(distHigh <= 5) gate.push(`Harga hanya ${distHigh.toFixed(1)}% di bawah puncak 52 minggu (${fmtRp(high52)}).`);
+  const closes = daily.map(c => c.close);
+  const ema50Arr = calcEMA(closes, 50);
+  const ema50 = ema50Arr[ema50Arr.length-1];
+  if(ema50 && price > ema50*1.15) gate.push(`Harga ${((price/ema50-1)*100).toFixed(0)}% di atas EMA50 harian, sudah terlalu jauh dari rata-ratanya.`);
+  const rsiArr = calcRSI(closes, 14);
+  const rsi = rsiArr[rsiArr.length-1];
+  if(rsi > 70) gate.push(`RSI14 harian ${rsi.toFixed(0)}, sudah overbought.`);
+  let cycleNote = null;
+  if(kind === 'komoditas'){
+    const histMargins = annualSorted.filter(a => a.ni != null && a.revenue > 0).map(a => a.ni/a.revenue*100);
+    if(histMargins.length >= 3 && margin != null){
+      const avgM = histMargins.reduce((s,x)=>s+x,0)/histMargins.length;
+      cycleNote = `Margin sekarang ${margin.toFixed(1)}% vs rata-rata ${histMargins.length} tahun ${avgM.toFixed(1)}%.`;
+      if(avgM > 0 && margin > avgM*1.5) gate.push(`Laba kemungkinan sedang di puncak siklus: ${cycleNote} PER yang kelihatan murah di kondisi ini sering menipu.`);
+    }
+  }
+  if(valPct == null) warnings.push('Riwayat valuasi belum cukup panjang untuk dibandingkan, jadi status murah/mahal belum bisa ditentukan. Gerbang anti-pucuk tetap jalan dari sisi teknikal.');
+
+  // --- Tren vs riwayat tersimpan ---
+  const prevRec = fundHistoryCache.filter(h => h.ticker === ticker && h.period < latestDate).sort((a,b) => b.period.localeCompare(a.period))[0];
+  const delta = prevRec ? Math.round((score - prevRec.score)*10)/10 : null;
+  const trend = delta == null ? null : delta >= 1 ? 'membaik' : delta <= -1 ? 'memburuk' : 'stabil';
+  const trendComparable = prevRec ? (prevRec.scored == null || prevRec.scored === scored) : false;
+  if(prevRec && !trendComparable) warnings.push(`Jumlah metrik yang dinilai beda dengan ${fundQuarterLabel(prevRec.period)} (${prevRec.scored} vs ${scored}), jadi perubahan skor belum tentu karena fundamental berubah. Tren tidak dipakai untuk saran kurangi posisi.`);
+
+  // --- Saran posisi ---
+  let saran, saranCls, saranText, allowDca = false;
+  const gateOn = gate.length > 0;
+  if(score < 4){
+    saran = 'Hindari / pertimbangkan lepas'; saranCls = 'v-breakdown';
+    saranText = 'Kualitas bisnisnya lemah saat ini. Bukan kandidat untuk ditambah. Kalau sudah pegang, pertimbangkan lepas dan tunggu perbaikan di laporan berikutnya.';
+  } else if(delta != null && delta <= -1.5 && trendComparable){
+    saran = 'Pertimbangkan kurangi posisi'; saranCls = 'v-breakdown';
+    saranText = `Skor turun ${Math.abs(delta).toFixed(1)} poin dibanding ${fundQuarterLabel(prevRec.period)}. Fundamental sedang memburuk, jadi lebih aman kurangi dulu dan tunggu laporan berikutnya.`;
+  } else if(score >= 6){
+    if(gateOn || valStatus === 'mahal'){
+      saran = 'Tahan, jangan tambah dulu'; saranCls = 'v-expensive';
+      saranText = 'Bisnisnya bagus, tapi harganya sedang di area pucuk/mahal. Pegang yang sudah ada, tunggu harga turun sebelum menambah.';
+    } else {
+      saran = 'Kandidat tambah posisi'; saranCls = 'v-strong'; allowDca = true;
+      saranText = 'Kualitas bisnis baik dan harga tidak sedang di pucuk. Lanjut cari harga entry yang presisi di Timing DCA.';
+    }
+  } else {
+    if(!gateOn && valStatus === 'murah'){
+      saran = 'Boleh tambah porsi kecil'; saranCls = 'v-mid'; allowDca = true;
+      saranText = 'Kualitasnya sedang, tapi valuasinya murah dan harga tidak di pucuk. Kalau mau tambah, porsi kecil saja.';
+    } else {
+      saran = 'Pantau saja'; saranCls = 'v-mid';
+      saranText = 'Kualitas sedang dan harganya belum menarik. Belum ada alasan kuat untuk menambah.';
+    }
+  }
+
+  // Petunjuk laporan baru (kuartal berikutnya biasanya rilis ~1 bulan setelah tutup kuartal)
+  let nqNum = Math.ceil(Number(lm)/3) + 1, nqYear = Number(ly);
+  if(nqNum > 4){ nqNum = 1; nqYear++; }
+  const nextQEnd = fundQuarterEnd(nqNum, nqYear);
+  const daysSinceNext = fundDaysBetween(nextQEnd, new Date().toISOString().slice(0,10));
+  let newReportHint = null;
+  if(daysSinceNext >= 25){
+    newReportHint = `Data terbaru masih ${fundQuarterLabel(latestDate)}. Laporan ${fundQuarterLabel(nextQEnd)} mungkin sudah rilis di Stockbit. Input manual supaya analisanya lebih update.`;
+  }
+
+  return {
+    ticker, kind, kindAuto, score, earned, maxPts, pillars, label: fundLabel(score),
+    latestDate, sourceManual: !!sources[latestDate], ttmBasis, ttmNI, ttmRev, equity, price,
+    roe, margin, revYoY, niYoY, der, cashQ,
+    per, pbv, perMed: median(perHist), pbvMed: median(pbvHist), perPct, pbvPct, valPct, valStatus,
+    gate, cycleNote, rsi, high52, prevRec, delta, trend, scored,
+    saran, saranCls, saranText, allowDca, warnings, fxNote, newReportHint
+  };
+}
+
+async function fundFetchCandlesSafe(ticker, interval, range){
+  try{ return await fetchYahooCandles(ticker, interval, range); }
+  catch(e){ return null; }
+}
+
+function fundRenderResult(r){
+  const box = document.getElementById('fund-result-box');
+  const trendTxt = r.trend == null
+    ? 'Belum ada pembanding. Riwayat tersimpan otomatis tiap kuartal.'
+    : `${r.trend === 'membaik' ? '▲' : r.trend === 'memburuk' ? '▼' : '■'} ${r.trend} (${r.delta > 0 ? '+' : ''}${r.delta.toFixed(1)} vs ${fundQuarterLabel(r.prevRec.period)})`;
+  const trendColor = r.trend === 'membaik' ? 'var(--green)' : r.trend === 'memburuk' ? 'var(--red)' : 'var(--text-secondary)';
+  const valColor = r.valStatus === 'murah' ? 'var(--green)' : r.valStatus === 'mahal' ? 'var(--red)' : r.valStatus === 'wajar' ? 'var(--amber)' : 'var(--text-muted)';
+  const dots = (pts) => pts == null ? '<span style="color:var(--text-muted)">n/a</span>' : '<span class="fund-dots" style="color:' + (pts===2?'var(--green)':pts===1?'var(--amber)':'var(--red)') + '">' + '●'.repeat(pts) + '○'.repeat(2-pts) + '</span>';
+
+  box.innerHTML = `
+    <div class="card">
+      <div class="dca-verdict ${r.saranCls}">
+        <b>${r.saran}</b><br>${r.saranText}
+        ${r.gate.length ? `<ul class="gate-list">${r.gate.map(g => `<li>${g}</li>`).join('')}</ul>` : ''}
+      </div>
+
+      <div class="stat-grid" style="margin-bottom:14px;">
+        <div class="stat"><div class="k">Skor kualitas bisnis</div><div class="v" style="color:${r.label.color};">${r.score.toFixed(1)} / 10 &middot; ${r.label.text}</div></div>
+        <div class="stat"><div class="k">Tren skor</div><div class="v" style="font-size:12px; font-family:var(--sans); font-weight:500; color:${trendColor};">${trendTxt}</div></div>
+        <div class="stat"><div class="k">Valuasi vs sejarahnya</div><div class="v" style="color:${valColor};">${r.valStatus ? r.valStatus.toUpperCase() : 'Belum bisa dinilai'}</div></div>
+        <div class="stat"><div class="k">Gerbang anti-pucuk</div><div class="v" style="color:${r.gate.length ? 'var(--red)' : 'var(--green)'};">${r.gate.length ? r.gate.length + ' tanda pucuk' : 'Aman'}</div></div>
+        <div class="stat"><div class="k">PER (median 5 th)</div><div class="v" style="font-size:13px;">${fundX(r.per)} (${fundX(r.perMed)})</div></div>
+        <div class="stat"><div class="k">PBV (median 5 th)</div><div class="v" style="font-size:13px;">${fundX(r.pbv,2)} (${fundX(r.pbvMed,2)})</div></div>
+      </div>
+
+      <p class="fund-hint" style="margin-top:0;">
+        Data ${fundQuarterLabel(r.latestDate)}${r.sourceManual ? ' (input manual Stockbit)' : ' (Yahoo)'} &middot; jenis: ${FUND_KIND_LABEL[r.kind]}${r.kindAuto ? ' (otomatis, ubah di pilihan Jenis bisnis kalau salah)' : ''} &middot; harga ${fmtRp(r.price)} &middot; laba ${r.ttmBasis}: ${fundBig(r.ttmNI)}
+      </p>
+
+      <p class="card-title">Rincian per pilar</p>
+      ${r.pillars.map(p => {
+        const got = p.metrics.filter(m => m.pts != null);
+        const pe = got.reduce((s,m)=>s+m.pts,0), pm = got.length*2;
+        return `<div class="fund-pillar">
+          <div class="fund-pillar-head"><span>${p.name}</span><span style="font-family:var(--mono); color:var(--text-secondary);">${pm ? pe + '/' + pm : 'n/a'}</span></div>
+          ${p.metrics.map(m => `<div class="fund-metric"><span>${m.label} <span style="color:var(--text-muted);">(${m.hint})</span></span><span class="val">${m.val} &nbsp;${dots(m.pts)}</span></div>`).join('')}
+        </div>`;
+      }).join('')}
+
+      ${r.allowDca ? `<button class="btn" id="btn-fund-to-dca" style="margin-top:6px;">Cari zona entry di Timing DCA</button>` : ''}
+      ${r.newReportHint ? `<div class="warn">${r.newReportHint}</div>` : ''}
+      ${r.fxNote ? `<div class="warn">${r.fxNote}</div>` : ''}
+      ${r.cycleNote && !r.gate.some(g => g.includes('siklus')) ? `<div class="warn">Siklus komoditas: ${r.cycleNote}</div>` : ''}
+      ${r.warnings.map(w => `<div class="warn">${w}</div>`).join('')}
+      <div class="fund-hint" id="fund-save-note"></div>
+      <div class="warn">Ini alat bantu baca data laporan keuangan dan harga, bukan nasihat investasi. Keputusan akhir tetap di kamu.</div>
+    </div>
+  `;
+  box.style.display = 'block';
+  const dcaBtn = document.getElementById('btn-fund-to-dca');
+  if(dcaBtn) dcaBtn.addEventListener('click', () => {
+    document.querySelector('.tab[data-tab="dca"]').click();
+    document.getElementById('dca-ticker').value = r.ticker;
+    document.getElementById('btn-dca-analyze').click();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
+
+async function fundSaveHistory(r){
+  const docId = r.ticker + '_' + r.latestDate;
+  await fundHistoryRef().doc(docId).set({
+    ticker: r.ticker, period: r.latestDate, kind: r.kind, kindAuto: r.kindAuto,
+    score: r.score, scored: r.scored, label: r.label.text, valStatus: r.valStatus || null,
+    valPct: r.valPct != null ? Math.round(r.valPct) : null, gateCount: r.gate.length,
+    saran: r.saran, saranCls: r.saranCls, price: r.price,
+    roe: r.roe ?? null, niYoY: r.niYoY ?? null, revYoY: r.revYoY ?? null,
+    per: r.per ?? null, pbv: r.pbv ?? null,
+    source: r.sourceManual ? 'manual' : 'yahoo',
+    savedDate: new Date().toISOString().slice(0,10),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+}
+
+document.getElementById('btn-fund-analyze').addEventListener('click', async () => {
+  const errBox = document.getElementById('fund-err-box');
+  const resultBox = document.getElementById('fund-result-box');
+  errBox.innerHTML = '';
+  const ticker = fundCleanTicker(document.getElementById('fund-ticker').value);
+  document.getElementById('fund-ticker').value = ticker;
+  if(!ticker){ errBox.innerHTML = '<div class="err">Ticker harus diisi.</div>'; return; }
+  const btn = document.getElementById('btn-fund-analyze');
+  btn.disabled = true;
+  resultBox.style.display = 'none';
+  try{
+    const r = await fundAnalyze(ticker, document.getElementById('fund-kind').value);
+    fundRenderResult(r);
+    if(!document.getElementById('fm-ticker').value) document.getElementById('fm-ticker').value = ticker;
+    if(!document.getElementById('fm-year').value) document.getElementById('fm-year').value = new Date().getFullYear();
+    try{
+      await fundSaveHistory(r);
+      document.getElementById('fund-save-note').textContent = `Tersimpan otomatis ke riwayat (${fundQuarterLabel(r.latestDate)}). Cek ulang di kuartal yang sama akan memperbarui catatan ini, bukan menambah baru.`;
+    }catch(e){
+      document.getElementById('fund-save-note').textContent = 'Gagal menyimpan ke riwayat: ' + e.message;
+    }
+  }catch(e){
+    const msg = e.message || String(e);
+    let extra = '';
+    if(/401|429|rate/i.test(msg)) extra = ' Layanan proxy gratis sedang membatasi permintaan. Tunggu 30–60 detik lalu coba lagi.';
+    else if(/failed to fetch|timeout|networkerror/i.test(msg)) extra = ' Semua proxy gagal dihubungi. Coba matikan ad-blocker/VPN, ganti jaringan, atau coba lagi beberapa menit lagi.';
+    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + msg + extra + '</div>';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Analisa fundamental';
+});
+
+// ---------- Input manual laporan kuartal ----------
+function fundManualFormValues(){
+  const v = (id) => { const x = document.getElementById(id).value.trim(); return x === '' ? null : Number(x); };
+  return {
+    ticker: fundCleanTicker(document.getElementById('fm-ticker').value),
+    q: Number(document.getElementById('fm-q').value),
+    year: Number(document.getElementById('fm-year').value),
+    ccy: document.getElementById('fm-ccy').value,
+    unit: document.getElementById('fm-unit').value,
+    rev: v('fm-rev'), ni: v('fm-ni'), ocf: v('fm-ocf'), shares: v('fm-shares'),
+    eq: v('fm-eq'), liab: v('fm-liab'), car: v('fm-car'), npl: v('fm-npl'), ldr: v('fm-ldr')
+  };
+}
+
+document.getElementById('btn-fm-save').addEventListener('click', async () => {
+  const errBox = document.getElementById('fm-err-box');
+  errBox.innerHTML = '';
+  const m = fundManualFormValues();
+  const errors = [];
+  if(!m.ticker) errors.push('Ticker harus diisi.');
+  if(!m.year || m.year < 2000 || m.year > 2100) errors.push('Tahun harus diisi dengan benar.');
+  const filled = ['rev','ni','ocf','eq','liab','car','npl','ldr'].filter(k => m[k] != null);
+  if(filled.length === 0) errors.push('Isi minimal satu angka.');
+  if(['rev','ni','ocf','eq','liab','shares','car','npl','ldr'].some(k => m[k] != null && !isFinite(m[k]))) errors.push('Ada angka yang tidak valid.');
+  if(errors.length){ errBox.innerHTML = '<div class="err">' + errors.join('<br>') + '</div>'; return; }
+  const btn = document.getElementById('btn-fm-save');
+  btn.disabled = true;
+  try{
+    const date = fundQuarterEnd(m.q, m.year);
+    await fundManualRef().doc(m.ticker + '_' + date).set({ ...m, period: date, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    btn.textContent = 'Tersimpan ✓';
+    // langsung hitung ulang skor ticker ini
+    document.getElementById('fund-ticker').value = m.ticker;
+    setTimeout(() => { btn.textContent = 'Simpan laporan kuartal'; btn.disabled = false; }, 1500);
+    setTimeout(() => document.getElementById('btn-fund-analyze').click(), 600);
+  }catch(e){
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+    btn.disabled = false;
+  }
+});
+
+function fundRenderManualList(){
+  const box = document.getElementById('fm-list');
+  if(!box) return;
+  if(fundManualCache.length === 0){ box.innerHTML = '<div class="empty" style="padding:12px 0;">Belum ada laporan yang diinput.</div>'; return; }
+  const sorted = fundManualCache.slice().sort((a,b) => a.ticker.localeCompare(b.ticker) || b.period.localeCompare(a.period));
+  const unitShort = { penuh:'', juta:' jt', miliar:' M', triliun:' T' };
+  box.innerHTML = sorted.map(m => {
+    const u = unitShort[m.unit] ?? '';
+    const parts = [];
+    if(m.ni != null) parts.push(`Laba ${fmtNum(m.ni)}${u}`);
+    if(m.rev != null) parts.push(`Pendapatan ${fmtNum(m.rev)}${u}`);
+    if(m.car != null) parts.push(`CAR ${m.car}%`);
+    if(m.npl != null) parts.push(`NPL ${m.npl}%`);
+    return `<div class="j-entry">
+      <div class="j-top"><div><span class="j-ticker">${m.ticker}</span><span class="j-date" style="margin-left:8px;">${fundQuarterLabel(m.period)} &middot; ${m.ccy}</span></div></div>
+      <div class="fund-hint" style="margin:0 0 10px;">${parts.join(' &middot; ') || '-'}</div>
+      <div class="j-actions">
+        <button data-fm-edit="${m.id}">Edit</button>
+        <button data-fm-del="${m.id}">Hapus</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-fm-edit]').forEach(b => b.addEventListener('click', () => {
+    const m = fundManualCache.find(x => x.id === b.dataset.fmEdit);
+    if(!m) return;
+    const set = (id, v) => document.getElementById(id).value = (v == null ? '' : v);
+    set('fm-ticker', m.ticker); set('fm-q', m.q); set('fm-year', m.year); set('fm-ccy', m.ccy || 'IDR'); set('fm-unit', m.unit || 'miliar');
+    set('fm-rev', m.rev); set('fm-ni', m.ni); set('fm-ocf', m.ocf); set('fm-shares', m.shares);
+    set('fm-eq', m.eq); set('fm-liab', m.liab); set('fm-car', m.car); set('fm-npl', m.npl); set('fm-ldr', m.ldr);
+    document.getElementById('fm-ticker').scrollIntoView({ behavior:'smooth', block:'center' });
+  }));
+  box.querySelectorAll('[data-fm-del]').forEach(b => b.addEventListener('click', async () => {
+    if(!confirm('Hapus input laporan kuartal ini?')) return;
+    try{ await fundManualRef().doc(b.dataset.fmDel).delete(); }
+    catch(e){ alert('Gagal menghapus: ' + e.message); }
+  }));
+}
+
+// ---------- Riwayat & tren ----------
+function fundRenderHistory(){
+  const box = document.getElementById('fund-history-list');
+  if(!box) return;
+  if(fundHistoryCache.length === 0){
+    box.innerHTML = '<div class="empty">Belum ada riwayat. Setiap analisa otomatis tersimpan per kuartal, jadi trennya terbentuk sendiri dari waktu ke waktu.</div>';
+    return;
+  }
+  const groups = {};
+  fundHistoryCache.forEach(h => { (groups[h.ticker] = groups[h.ticker] || []).push(h); });
+  const list = Object.entries(groups).map(([ticker, recs]) => {
+    recs.sort((a,b) => a.period.localeCompare(b.period));
+    return { ticker, recs, latest: recs[recs.length-1] };
+  }).sort((a,b) => (b.latest.savedDate || '').localeCompare(a.latest.savedDate || ''));
+
+  box.innerHTML = list.map(g => {
+    const L = g.latest;
+    const lab = fundLabel(L.score);
+    const badge = { 'v-strong':'status-closed-win', 'v-mid':'status-open', 'v-expensive':'status-partial', 'v-breakdown':'status-closed-loss' }[L.saranCls] || 'status-open';
+    return `<div class="j-entry">
+      <div class="j-top">
+        <div><span class="j-ticker">${g.ticker}</span><span class="j-date" style="margin-left:8px;">${FUND_KIND_LABEL[L.kind] || ''} &middot; dicek ${L.savedDate || '-'}</span></div>
+        <span class="j-status ${badge}">${L.saran}</span>
+      </div>
+      <div class="trend-row">
+        ${g.recs.map(h => `<span class="trend-chip" style="color:${fundLabel(h.score).color};">${fundQuarterLabel(h.period)}: ${Number(h.score).toFixed(1)}</span>`).join('<span style="color:var(--text-muted); font-size:11px; align-self:center;">→</span>')}
+      </div>
+      <div class="j-grid">
+        <div><div class="k">Skor</div><div class="v" style="color:${lab.color};">${Number(L.score).toFixed(1)} ${lab.text}</div></div>
+        <div><div class="k">Valuasi</div><div class="v">${L.valStatus || '-'}</div></div>
+        <div><div class="k">Anti-pucuk</div><div class="v" style="color:${L.gateCount ? 'var(--red)' : 'var(--green)'};">${L.gateCount ? L.gateCount + ' tanda' : 'aman'}</div></div>
+        <div><div class="k">Harga saat cek</div><div class="v">${L.price ? fmtNum(L.price) : '-'}</div></div>
+      </div>
+      <div class="j-actions">
+        <button data-fund-recheck="${g.ticker}" data-kind="${L.kindAuto ? 'auto' : L.kind}">Cek ulang</button>
+        <button data-fund-del="${g.ticker}">Hapus</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('[data-fund-recheck]').forEach(b => b.addEventListener('click', () => {
+    document.getElementById('fund-ticker').value = b.dataset.fundRecheck;
+    document.getElementById('fund-kind').value = b.dataset.kind || 'auto';
+    document.getElementById('fund-ticker').scrollIntoView({ behavior:'smooth', block:'center' });
+    document.getElementById('btn-fund-analyze').click();
+  }));
+  box.querySelectorAll('[data-fund-del]').forEach(b => b.addEventListener('click', async () => {
+    const t = b.dataset.fundDel;
+    const ids = fundHistoryCache.filter(h => h.ticker === t).map(h => h.id);
+    if(!confirm(`Hapus seluruh riwayat fundamental ${t} (${ids.length} kuartal)?`)) return;
+    try{ await Promise.all(ids.map(id => fundHistoryRef().doc(id).delete())); }
+    catch(e){ alert('Gagal menghapus: ' + e.message); }
+  }));
+}
+
+function subscribeFund(){
+  if(unsubscribeFundHistory) unsubscribeFundHistory();
+  if(unsubscribeFundManual) unsubscribeFundManual();
+  unsubscribeFundHistory = fundHistoryRef().onSnapshot(snap => {
+    fundHistoryCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    fundRenderHistory();
+  }, err => {
+    document.getElementById('fund-history-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + err.message + '</div>';
+  });
+  unsubscribeFundManual = fundManualRef().onSnapshot(snap => {
+    fundManualCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    fundRenderManualList();
+  }, err => {
+    document.getElementById('fm-list').innerHTML = '<div class="err">Gagal memuat input manual: ' + err.message + '</div>';
+  });
 }
 </script>
 </body>
