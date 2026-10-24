@@ -716,6 +716,7 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeDca){ unsubscribeDca(); unsubscribeDca = null; }
     if(unsubscribeFundHistory){ unsubscribeFundHistory(); unsubscribeFundHistory = null; }
     if(unsubscribeFundManual){ unsubscribeFundManual(); unsubscribeFundManual = null; }
+    if(unsubscribeFundPositions){ unsubscribeFundPositions(); unsubscribeFundPositions = null; }
     rencanaAutoRefreshDone = false;
   }
 });
@@ -2538,6 +2539,10 @@ let fundHistoryCache = [];
 let fundManualCache = [];
 let unsubscribeFundHistory = null;
 let unsubscribeFundManual = null;
+let fundPositionsCache = [];
+let unsubscribeFundPositions = null;
+let currentFundResult = null;
+function fundPositionsRef(){ return db.collection('users').doc(currentUser.uid).collection('fund_positions'); }
 
 function fundCleanTicker(v){ return (v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function fundDetectKind(ticker){
@@ -2840,6 +2845,23 @@ async function fundAnalyze(ticker, kindChoice){
   if(!daily) throw new Error('Gagal mengambil data harga harian. Tunggu sebentar lalu coba lagi.');
   const price = daily[daily.length-1].close;
 
+  let weeklyTrend = 'unknown';
+  if(weekly && weekly.length >= 55){
+    const wc = weekly.map(c => c.close);
+    const w20 = calcEMA(wc, 20), w50 = calcEMA(wc, 50);
+    const a = w20[w20.length-1], b = w50[w50.length-1];
+    if(a != null && b != null) weeklyTrend = a > b ? 'bullish' : 'bearish';
+  }
+  // Level support di bawah harga sekarang (swing low 1 tahun) untuk rencana tambah bertahap
+  const supportLevels = [];
+  for(const w of [3, 2]){
+    findSwingPoints(daily, w).lows
+      .map(l => l.price)
+      .filter(v => v < price*0.98)
+      .forEach(v => { if(!supportLevels.some(x => Math.abs(x - v)/v < 0.03)) supportLevels.push(v); });
+  }
+  supportLevels.sort((a,b) => b - a);
+
   const eps = (ttmNI != null && shares > 0) ? ttmNI/shares : null;
   const bvps = (equity > 0 && shares > 0) ? equity/shares : null;
   const per = (eps > 0) ? price/eps : null;
@@ -2910,12 +2932,15 @@ async function fundAnalyze(ticker, kindChoice){
     if(gateOn || valStatus === 'mahal'){
       saran = 'Tahan, jangan tambah dulu'; saranCls = 'v-expensive';
       saranText = 'Bisnisnya bagus, tapi harganya sedang di area pucuk/mahal. Pegang yang sudah ada, tunggu harga turun sebelum menambah.';
+    } else if(weeklyTrend === 'bearish'){
+      saran = 'Kandidat, tapi tunggu Weekly berbalik'; saranCls = 'v-expensive'; allowDca = true;
+      saranText = 'Kualitas bisnis baik dan harga tidak di pucuk, tapi tren Weekly masih turun (EMA20 di bawah EMA50). Masukkan ke pantauan, mulai beli setelah Weekly berbalik naik supaya tidak menangkap pisau jatuh.';
     } else {
       saran = 'Kandidat tambah posisi'; saranCls = 'v-strong'; allowDca = true;
-      saranText = 'Kualitas bisnis baik dan harga tidak sedang di pucuk. Lanjut cari harga entry yang presisi di Timing DCA.';
+      saranText = 'Kualitas bisnis baik, harga tidak sedang di pucuk, dan tren Weekly mendukung. Lanjut cari harga entry yang presisi di Timing DCA.';
     }
   } else {
-    if(!gateOn && valStatus === 'murah'){
+    if(!gateOn && valStatus === 'murah' && weeklyTrend !== 'bearish'){
       saran = 'Boleh tambah porsi kecil'; saranCls = 'v-mid'; allowDca = true;
       saranText = 'Kualitasnya sedang, tapi valuasinya murah dan harga tidak di pucuk. Kalau mau tambah, porsi kecil saja.';
     } else {
@@ -2939,7 +2964,7 @@ async function fundAnalyze(ticker, kindChoice){
     latestDate, sourceManual: !!sources[latestDate], ttmBasis, ttmNI, ttmRev, equity, price,
     roe, margin, revYoY, niYoY, der, cashQ,
     per, pbv, perMed: median(perHist), pbvMed: median(pbvHist), perPct, pbvPct, valPct, valStatus,
-    gate, cycleNote, rsi, high52, prevRec, delta, trend, scored,
+    gate, cycleNote, rsi, high52, prevRec, delta, trend, scored, trendComparable, weeklyTrend, supportLevels, eps, bvps, perHist, pbvHist,
     saran, saranCls, saranText, allowDca, warnings, fxNote, newReportHint
   };
 }
@@ -2989,6 +3014,7 @@ function fundRenderResult(r){
       }).join('')}
 
       ${r.allowDca ? `<button class="btn" id="btn-fund-to-dca" style="margin-top:6px;">Cari zona entry di Timing DCA</button>` : ''}
+      <div id="fund-position-box" style="margin-top:14px;"></div>
       ${r.newReportHint ? `<div class="warn">${r.newReportHint}</div>` : ''}
       ${r.fxNote ? `<div class="warn">${r.fxNote}</div>` : ''}
       ${r.cycleNote && !r.gate.some(g => g.includes('siklus')) ? `<div class="warn">Siklus komoditas: ${r.cycleNote}</div>` : ''}
@@ -2998,6 +3024,9 @@ function fundRenderResult(r){
     </div>
   `;
   box.style.display = 'block';
+  currentFundResult = r;
+  fundPosEditing = false;
+  fundRenderPosition();
   const dcaBtn = document.getElementById('btn-fund-to-dca');
   if(dcaBtn) dcaBtn.addEventListener('click', () => {
     document.querySelector('.tab[data-tab="dca"]').click();
@@ -3160,6 +3189,9 @@ function fundRenderHistory(){
       <div class="trend-row">
         ${g.recs.map(h => `<span class="trend-chip" style="color:${fundLabel(h.score).color};">${fundQuarterLabel(h.period)}: ${Number(h.score).toFixed(1)}</span>`).join('<span style="color:var(--text-muted); font-size:11px; align-self:center;">→</span>')}
       </div>
+      ${(() => { const ps = fundPositionsCache.find(x => x.id === g.ticker); if(!ps || !L.price) return '';
+        const pl = (L.price/ps.avgPrice - 1)*100;
+        return `<div class="fund-hint" style="margin:0 0 8px;">Posisi: ${fmtNum(ps.lot)} lot @ ${fmtNum(ps.avgPrice)} &middot; <span style="color:${pl >= 0 ? 'var(--green)' : 'var(--red)'};">${fundPct(pl)}</span> (harga saat cek)</div>`; })()}
       <div class="j-grid">
         <div><div class="k">Skor</div><div class="v" style="color:${lab.color};">${Number(L.score).toFixed(1)} ${lab.text}</div></div>
         <div><div class="k">Valuasi</div><div class="v">${L.valStatus || '-'}</div></div>
@@ -3188,7 +3220,242 @@ function fundRenderHistory(){
   }));
 }
 
+// ---------- Posisi yang sudah dipegang ----------
+let fundPosEditing = false;
+const FUND_BLUE_DEFAULT = ['BBCA','BBRI','BMRI','BBNI','TLKM','ASII','UNVR','ICBP','INDF','KLBF'];
+
+function fundDefaultKategori(r){
+  if(r.kind === 'komoditas') return 'komoditas';
+  if(FUND_BLUE_DEFAULT.includes(r.ticker)) return 'blue';
+  return 'menengah';
+}
+
+// Rata-rata baru setelah menambah sejumlah lot di harga tertentu
+function fundNewAvg(lot, avg, addLot, addPrice){
+  const total = lot + addLot;
+  return total > 0 ? (lot*avg + addLot*addPrice) / total : avg;
+}
+
+function fundPositionAnalysis(r, pos){
+  const lot = Number(pos.lot), avg = Number(pos.avgPrice), price = r.price;
+  const cost = lot * 100 * avg;
+  const value = lot * 100 * price;
+  const plPct = (price/avg - 1) * 100;
+  const bepNeed = price < avg ? (avg/price - 1) * 100 : 0;
+
+  // Valuasi di harga rata-rata kamu vs harga sekarang (laba & ekuitas yang sama = perbandingan level harga)
+  const useMetric = (r.kind === 'komoditas' || !(r.eps > 0)) ? 'PBV' : 'PER';
+  const hist = useMetric === 'PER' ? r.perHist : r.pbvHist;
+  const base = useMetric === 'PER' ? r.eps : r.bvps;
+  const multAvg = base > 0 ? avg / base : null;
+  const multNow = base > 0 ? price / base : null;
+  const pctAvg = (multAvg != null && hist && hist.length >= 26) ? fundPercentile(hist, multAvg) : null;
+  const pctNow = (multNow != null && hist && hist.length >= 26) ? fundPercentile(hist, multNow) : null;
+
+  // Kenapa harganya turun / naik?
+  const weakening = r.score < 4 || (r.trend === 'memburuk' && r.trendComparable) || (r.niYoY != null && r.niYoY !== 999 && r.niYoY <= -15);
+  let diagnosis;
+  if(plPct >= 0) diagnosis = `Posisi sedang untung ${plPct.toFixed(1)}%. Menambah di sini berarti menaikkan harga rata-rata, jadi syarat valuasi dan anti-pucuk berlaku penuh.`;
+  else if(weakening) diagnosis = `Harga turun dan bisnisnya ikut melemah (skor ${r.score.toFixed(1)}${r.trend === 'memburuk' ? ', tren memburuk' : ''}${r.niYoY != null && r.niYoY !== 999 && r.niYoY <= -15 ? `, laba turun ${Math.abs(r.niYoY).toFixed(0)}% YoY` : ''}). Kemungkinan pasar sedang menilai ulang fundamentalnya, bukan sekadar harga yang murah.`;
+  else if(r.score >= 6) diagnosis = `Harga turun ${Math.abs(plPct).toFixed(1)}% sementara bisnisnya masih baik (skor ${r.score.toFixed(1)}). Yang turun lebih ke harganya daripada kualitas bisnisnya.`;
+  else diagnosis = `Harga turun ${Math.abs(plPct).toFixed(1)}% dan kualitas bisnisnya sedang-sedang saja (skor ${r.score.toFixed(1)}). Belum ada bukti kuat bahwa ini sekadar diskon harga.`;
+
+  // Ruang alokasi dari batas kategori di tab Batas Posisi (diterapkan per emiten)
+  const kat = pos.kategori || 'menengah';
+  const katLabel = (SIZING_CATS.find(c => c.key === kat) || {}).label || kat;
+  const limitPct = sizingSettings.limits?.[kat] || 0;
+  const hasModal = sizingSettings.totalModal > 0;
+  const cap = hasModal ? sizingSettings.totalModal * limitPct/100 : null;
+  const room = hasModal ? Math.max(0, cap - cost) : null;
+  const maxAddLot = hasModal ? Math.floor(room / price / 100) : null;
+
+  // Saran khusus untuk posisi ini
+  let cls, title, text, allowAdd = false;
+  const reasons = [];
+  if(r.score < 4 || (r.trend === 'memburuk' && r.trendComparable)){
+    cls = 'v-breakdown'; title = plPct < 0 ? 'Jangan average down, pertimbangkan cut loss' : 'Jangan tambah, pertimbangkan ambil untung';
+    text = 'Fundamentalnya lemah atau sedang memburuk. Menambah di kondisi ini memperbesar posisi di bisnis yang belum terbukti pulih.';
+  } else if(r.score < 6 && plPct < 0){
+    cls = 'v-mid'; title = 'Jangan tambah dulu, pantau laporan berikutnya';
+    text = 'Kualitas bisnisnya sedang. Belum cukup alasan untuk menambah ke posisi yang sedang minus. Lihat dulu apakah laporan kuartal berikutnya membaik.';
+  } else if(hasModal && maxAddLot <= 0){
+    cls = 'v-expensive'; title = 'Tahan, posisi sudah di batas kategori';
+    text = `Modal di ${r.ticker} sudah ${fundBig(cost)} dari batas ${fundBig(cap)} (${katLabel} ${limitPct}% dari modal aktif). Walaupun harganya menarik, posisi ini sudah maksimal.`;
+  } else if(r.weeklyTrend === 'bearish'){
+    cls = 'v-expensive'; title = 'Tahan, tunggu Weekly berbalik naik';
+    text = 'Bisnisnya baik, tapi tren Weekly masih turun (EMA20 di bawah EMA50). Menambah sekarang berisiko menangkap pisau jatuh. Tunggu EMA20 Weekly kembali di atas EMA50.';
+  } else if(r.gate.length || r.valStatus === 'mahal'){
+    cls = 'v-expensive'; title = 'Tahan, harga sedang di area pucuk';
+    text = 'Bisnisnya baik, tapi harga atau valuasinya sedang tinggi. Pegang yang sudah ada, tambah nanti saat harga turun.';
+  } else {
+    allowAdd = true;
+    cls = 'v-strong'; title = plPct < 0 ? 'Boleh average down bertahap' : 'Boleh tambah bertahap';
+    text = plPct < 0
+      ? 'Bisnis masih baik, Weekly tidak bearish, harga tidak di pucuk, dan masih ada ruang alokasi. Kalau mau menambah, bagi beberapa tahap di level support supaya masih ada amunisi kalau harga turun lagi.'
+      : 'Bisnis baik, harga tidak di pucuk, dan masih ada ruang alokasi. Tambah bertahap, jangan sekaligus.';
+  }
+  if(!hasModal) reasons.push('Total modal aktif belum diisi di tab Batas Posisi, jadi ruang alokasi belum bisa dicek.');
+  if(r.weeklyTrend === 'unknown') reasons.push('Data Weekly tidak tersedia, jadi konfirmasi arah besar belum dicek.');
+
+  // Rencana tambah bertahap
+  let plan = [];
+  if(allowAdd && (maxAddLot == null || maxAddLot > 0)){
+    const totalLot = maxAddLot == null ? null : maxAddLot;
+    const prices = [price];
+    (r.supportLevels || []).forEach(v => { if(prices.length < 3 && v < prices[prices.length-1]*0.97) prices.push(v); });
+    while(prices.length < 3) prices.push(prices[prices.length-1] * 0.93);
+    let lots;
+    if(totalLot == null) lots = [null, null, null];
+    else if(totalLot >= 3){ const a = Math.max(1, Math.floor(totalLot*0.4)), b = Math.max(1, Math.floor(totalLot*0.3)); lots = [a, b, totalLot - a - b]; }
+    else if(totalLot === 2) lots = [1, 1];
+    else lots = [1];
+    let curLot = lot, curAvg = avg;
+    plan = lots.map((l, i) => {
+      const pr = Math.round(prices[i]);
+      if(l != null){ curAvg = fundNewAvg(curLot, curAvg, l, pr); curLot += l; }
+      return { step: i+1, price: pr, lot: l, newAvg: l != null ? curAvg : null, bep: l != null ? Math.max(0, (curAvg/pr - 1)*100) : null, isSupport: i > 0 && (r.supportLevels || []).includes(prices[i]) };
+    });
+  }
+
+  // Alternatif: emiten lain dari riwayat yang skornya lebih tinggi dan sedang "kandidat tambah"
+  const latestByTicker = {};
+  fundHistoryCache.forEach(h => { if(!latestByTicker[h.ticker] || h.period > latestByTicker[h.ticker].period) latestByTicker[h.ticker] = h; });
+  const alternatives = Object.values(latestByTicker)
+    .filter(h => h.ticker !== r.ticker && h.saranCls === 'v-strong' && h.score >= r.score + 0.5)
+    .sort((a,b) => b.score - a.score).slice(0, 3);
+
+  return { lot, avg, price, cost, value, plPct, bepNeed, useMetric, multAvg, multNow, pctAvg, pctNow,
+    diagnosis, kat, katLabel, limitPct, hasModal, cap, room, maxAddLot, cls, title, text, allowAdd, reasons, plan, alternatives };
+}
+
+function fundRenderPosition(){
+  const box = document.getElementById('fund-position-box');
+  if(!box || !currentFundResult) return;
+  const r = currentFundResult;
+  const pos = fundPositionsCache.find(p => p.id === r.ticker);
+  const katOptions = (sel) => SIZING_CATS.map(c => `<option value="${c.key}" ${c.key === sel ? 'selected' : ''}>${c.label}</option>`).join('');
+
+  if(!pos || fundPosEditing){
+    const sel = pos?.kategori || fundDefaultKategori(r);
+    box.innerHTML = `
+      <div class="fund-pillar">
+        <div class="fund-pillar-head"><span>${pos ? 'Edit posisi ' + r.ticker : 'Sudah pegang ' + r.ticker + '?'}</span></div>
+        <p class="fund-hint" style="margin:0 0 10px;">Isi posisimu supaya saran di atas memperhitungkan barang yang sudah dipegang: perlu average down atau tidak, dan masih ada ruang alokasi atau tidak.</p>
+        <div class="field-row">
+          <div class="field"><label>Jumlah lot</label><input type="number" id="fp-lot" inputmode="numeric" value="${pos ? pos.lot : ''}"></div>
+          <div class="field"><label>Harga rata-rata</label><input type="number" id="fp-avg" step="any" inputmode="decimal" value="${pos ? pos.avgPrice : ''}"></div>
+        </div>
+        <div class="field" style="margin-bottom:12px;"><label>Kategori (untuk batas alokasi)</label><select id="fp-kat">${katOptions(sel)}</select></div>
+        <div id="fp-err"></div>
+        <div class="btn-row">
+          ${pos ? '<button class="btn ghost" id="fp-cancel">Batal</button>' : ''}
+          <button class="btn secondary" id="fp-save">Simpan posisi</button>
+        </div>
+      </div>`;
+    document.getElementById('fp-save').addEventListener('click', async () => {
+      const lot = parseFloat(document.getElementById('fp-lot').value);
+      const avg = parseFloat(document.getElementById('fp-avg').value);
+      const err = document.getElementById('fp-err');
+      if(!(lot > 0) || !(avg > 0)){ err.innerHTML = '<div class="err">Jumlah lot dan harga rata-rata harus diisi.</div>'; return; }
+      try{
+        await fundPositionsRef().doc(r.ticker).set({ ticker: r.ticker, lot, avgPrice: avg, kategori: document.getElementById('fp-kat').value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        fundPosEditing = false;
+        fundRenderPosition();
+      }catch(e){ err.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>'; }
+    });
+    const cancel = document.getElementById('fp-cancel');
+    if(cancel) cancel.addEventListener('click', () => { fundPosEditing = false; fundRenderPosition(); });
+    return;
+  }
+
+  const a = fundPositionAnalysis(r, pos);
+  const plColor = a.plPct >= 0 ? 'var(--green)' : 'var(--red)';
+  const pctTxt = (p) => p == null ? '' : ` (persentil ${p.toFixed(0)})`;
+  box.innerHTML = `
+    <p class="card-title" style="margin-top:6px;">Posisi kamu di ${r.ticker}</p>
+    <div class="dca-verdict ${a.cls}"><b>${a.title}</b><br>${a.text}</div>
+    <div class="stat-grid" style="margin-bottom:12px;">
+      <div class="stat"><div class="k">Posisi</div><div class="v" style="font-size:13px;">${fmtNum(a.lot)} lot @ ${fmtNum(a.avg)}</div></div>
+      <div class="stat"><div class="k">Floating P/L</div><div class="v" style="color:${plColor};">${fundPct(a.plPct)} &middot; ${fundBig(a.value - a.cost)}</div></div>
+      <div class="stat"><div class="k">Nilai sekarang / modal</div><div class="v" style="font-size:13px;">${fundBig(a.value)} / ${fundBig(a.cost)}</div></div>
+      <div class="stat"><div class="k">Butuh naik untuk balik modal</div><div class="v" style="font-size:13px;">${a.bepNeed > 0 ? '+' + a.bepNeed.toFixed(1) + '%' : 'sudah untung'}</div></div>
+      <div class="stat"><div class="k">Arah Weekly</div><div class="v" style="font-size:13px; color:${r.weeklyTrend === 'bullish' ? 'var(--green)' : r.weeklyTrend === 'bearish' ? 'var(--red)' : 'var(--text-muted)'};">${r.weeklyTrend === 'bullish' ? 'Bullish' : r.weeklyTrend === 'bearish' ? 'Bearish' : 'Tidak tersedia'}</div></div>
+      <div class="stat"><div class="k">Ruang alokasi (${a.katLabel})</div><div class="v" style="font-size:13px;">${a.hasModal ? (a.maxAddLot > 0 ? '+' + fmtNum(a.maxAddLot) + ' lot lagi' : 'Penuh') : 'Belum diatur'}</div></div>
+    </div>
+
+    <div class="fund-pillar">
+      <div class="fund-pillar-head"><span>Kenapa harganya bergerak?</span></div>
+      <div class="fund-hint" style="margin:0;">${a.diagnosis}</div>
+      ${a.multAvg != null ? `<div class="fund-metric" style="margin-top:6px;"><span>${a.useMetric} di harga rata-ratamu</span><span class="val">${fundX(a.multAvg, a.useMetric === 'PBV' ? 2 : 1)}${pctTxt(a.pctAvg)}</span></div>
+      <div class="fund-metric"><span>${a.useMetric} di harga sekarang</span><span class="val">${fundX(a.multNow, a.useMetric === 'PBV' ? 2 : 1)}${pctTxt(a.pctNow)}</span></div>` : ''}
+      ${a.hasModal ? `<div class="fund-metric"><span>Batas ${a.katLabel} (${a.limitPct}% modal aktif)</span><span class="val">${fundBig(a.cost)} / ${fundBig(a.cap)}</span></div>` : ''}
+    </div>
+
+    ${a.plan.length ? `
+    <div class="fund-pillar">
+      <div class="fund-pillar-head"><span>Rencana tambah bertahap</span><span style="font-family:var(--mono); color:var(--text-secondary);">${a.maxAddLot != null ? 'maks ' + fmtNum(a.maxAddLot) + ' lot' : ''}</span></div>
+      ${a.plan.map(t => `<div class="fund-metric">
+        <span>Tahap ${t.step}: ${t.step === 1 ? 'harga sekarang' : t.isSupport ? 'support' : 'turun ~7%'} ${fmtNum(t.price)}${t.lot != null ? ' &middot; ' + fmtNum(t.lot) + ' lot' : ''}</span>
+        <span class="val">${t.newAvg != null ? 'rata-rata ' + fmtNum(t.newAvg) + ' &middot; BEP +' + t.bep.toFixed(1) + '%' : '-'}</span>
+      </div>`).join('')}
+      <div class="fund-hint" style="margin:6px 0 0;">Tahap berikutnya hanya dijalankan kalau harga memang turun ke level itu. Cek ulang tab ini sebelum tiap tahap, karena kondisi Weekly dan fundamental bisa berubah.</div>
+    </div>` : ''}
+
+    <div class="fund-pillar">
+      <div class="fund-pillar-head"><span>Simulasi tambah posisi</span></div>
+      <div class="field-row" style="margin-bottom:6px;">
+        <div class="field"><label>Tambah (lot)</label><input type="number" id="fp-sim-lot" inputmode="numeric" value="${a.plan[0]?.lot || (a.maxAddLot > 0 ? Math.min(a.maxAddLot, Math.max(1, Math.round(a.lot/2))) : Math.max(1, Math.round(a.lot/2)))}"></div>
+        <div class="field"><label>Di harga</label><input type="number" id="fp-sim-price" step="any" inputmode="decimal" value="${Math.round(a.price)}"></div>
+      </div>
+      <div id="fp-sim-out"></div>
+    </div>
+
+    ${a.alternatives.length ? `
+    <div class="fund-pillar">
+      <div class="fund-pillar-head"><span>Alternatif dengan skor lebih tinggi</span></div>
+      <div class="fund-hint" style="margin:0 0 6px;">Dari riwayat cek kamu, emiten ini sedang berstatus kandidat tambah dengan skor lebih baik. Modal mungkin lebih berguna di sini daripada untuk menyelamatkan posisi yang minus.</div>
+      ${a.alternatives.map(h => `<div class="fund-metric"><span>${h.ticker} &middot; dicek ${h.savedDate || '-'}</span><span class="val">${Number(h.score).toFixed(1)} &middot; ${h.valStatus || '-'}</span></div>`).join('')}
+    </div>` : ''}
+
+    ${a.reasons.map(x => `<div class="warn">${x}</div>`).join('')}
+    <div class="btn-row" style="margin-top:10px;">
+      <button class="btn ghost" id="fp-edit">Edit posisi</button>
+      <button class="btn ghost" id="fp-del">Hapus posisi</button>
+    </div>`;
+
+  const simUpdate = () => {
+    const addLot = parseFloat(document.getElementById('fp-sim-lot').value);
+    const addPrice = parseFloat(document.getElementById('fp-sim-price').value);
+    const out = document.getElementById('fp-sim-out');
+    if(!(addLot > 0) || !(addPrice > 0)){ out.innerHTML = ''; return; }
+    const newAvg = fundNewAvg(a.lot, a.avg, addLot, addPrice);
+    const newCost = a.cost + addLot*100*addPrice;
+    const bepAfter = Math.max(0, (newAvg/addPrice - 1)*100);
+    const bepBefore = Math.max(0, (a.avg/addPrice - 1)*100);
+    out.innerHTML = `
+      <div class="fund-metric"><span>Harga rata-rata</span><span class="val">${fmtNum(a.avg)} &rarr; ${fmtNum(newAvg)}</span></div>
+      <div class="fund-metric"><span>Butuh naik untuk balik modal (dari ${fmtNum(addPrice)})</span><span class="val">${(bepBefore === 0 && bepAfter === 0) ? 'tetap untung di harga ini' : '+' + bepBefore.toFixed(1) + '% &rarr; +' + bepAfter.toFixed(1) + '%'}</span></div>
+      <div class="fund-metric"><span>Total modal di ${r.ticker}</span><span class="val">${fundBig(newCost)}${a.hasModal ? ` <span style="color:${newCost > a.cap ? 'var(--red)' : 'var(--text-secondary)'};">(${(newCost/a.cap*100).toFixed(0)}% batas)</span>` : ''}</span></div>
+      <div class="fund-metric"><span>Dana yang dibutuhkan</span><span class="val">${fundBig(addLot*100*addPrice)}</span></div>`;
+  };
+  document.getElementById('fp-sim-lot').addEventListener('input', simUpdate);
+  document.getElementById('fp-sim-price').addEventListener('input', simUpdate);
+  simUpdate();
+  document.getElementById('fp-edit').addEventListener('click', () => { fundPosEditing = true; fundRenderPosition(); });
+  document.getElementById('fp-del').addEventListener('click', async () => {
+    if(!confirm(`Hapus catatan posisi ${r.ticker}?`)) return;
+    try{ await fundPositionsRef().doc(r.ticker).delete(); }
+    catch(e){ alert('Gagal menghapus: ' + e.message); }
+  });
+}
+
 function subscribeFund(){
+  if(unsubscribeFundPositions) unsubscribeFundPositions();
+  unsubscribeFundPositions = fundPositionsRef().onSnapshot(snap => {
+    fundPositionsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    fundRenderPosition();
+    fundRenderHistory();
+  }, err => console.error('fund_positions', err));
   if(unsubscribeFundHistory) unsubscribeFundHistory();
   if(unsubscribeFundManual) unsubscribeFundManual();
   unsubscribeFundHistory = fundHistoryRef().onSnapshot(snap => {
