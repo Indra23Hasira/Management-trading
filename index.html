@@ -131,6 +131,11 @@
   #auth-screen .sub{color:var(--text-muted); font-size:12px; margin-bottom:18px; font-family:var(--mono);}
   #auth-toggle{text-align:center; margin-top:12px; font-size:12px; color:var(--text-secondary); cursor:pointer;}
   #auth-toggle span{color:var(--green); font-weight:600;}
+  .auth-divider{display:flex; align-items:center; gap:10px; margin:18px 0 14px; color:var(--text-muted); font-size:11px;}
+  .auth-divider::before, .auth-divider::after{content:''; flex:1; height:1px; background:var(--border);}
+  .demo-note{text-align:center; font-size:11px; color:var(--text-muted); margin:10px 0 0; line-height:1.5;}
+  .demo-banner{align-items:center; justify-content:space-between; gap:12px; background:var(--amber-dim); border:1px solid var(--amber); color:#FFD98A; border-radius:10px; padding:10px 12px; margin-bottom:14px; font-size:12px; line-height:1.5;}
+  .demo-banner button{flex-shrink:0; background:none; border:1px solid var(--amber); color:#FFD98A; border-radius:6px; padding:5px 10px; font-size:11px; cursor:pointer;}
   #app-screen{display:none;}
   .loading-screen{text-align:center; padding:100px 20px; color:var(--text-muted); font-family:var(--mono); font-size:13px;}
 </style>
@@ -155,6 +160,9 @@
     <div id="auth-err"></div>
     <button class="btn" id="btn-auth-submit">Masuk</button>
     <div id="auth-toggle">Belum punya akun? <span>Daftar di sini</span></div>
+    <div class="auth-divider"><span>atau</span></div>
+    <button class="btn secondary" id="btn-demo">Coba versi demo</button>
+    <p class="demo-note">Lihat semua fitur dengan data contoh, tanpa daftar akun. Tidak ada yang disimpan.</p>
   </div>
 </div>
 
@@ -170,6 +178,11 @@
       <span id="user-email"></span>
       <button id="btn-logout">Keluar</button>
     </div>
+  </div>
+
+  <div id="demo-banner" class="demo-banner" style="display:none;">
+    <span><b>Mode demo.</b> Data contoh, bukan data asli. Perubahan tidak disimpan dan hilang saat halaman dimuat ulang.</span>
+    <button id="btn-demo-exit">Keluar demo</button>
   </div>
 
   <div class="tabs">
@@ -559,7 +572,7 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
-const db = firebase.firestore();
+let db = firebase.firestore(); // diganti database tiruan saat mode demo
 
 /* ============================================================
    KONEKSI KEDUA — READ-ONLY KE PROJECT RADAR IDX
@@ -587,6 +600,10 @@ radarAuth.onAuthStateChanged(user => {
 });
 
 async function ensureRadarLogin(){
+  if(window.__demoMode){
+    alert('Koneksi ke aplikasi Radar tidak tersedia di mode demo.');
+    return false;
+  }
   if(radarReady) return true;
   const email = document.getElementById('radar-login-email').value.trim();
   const password = document.getElementById('radar-login-password').value;
@@ -694,20 +711,25 @@ function fmtRp(n){ return 'Rp' + Math.round(n).toLocaleString('id-ID'); }
 function fmtNum(n){ return Math.round(n).toLocaleString('id-ID'); }
 
 // ---------- AUTH ----------
+function enterApp(user){
+  currentUser = user;
+  document.getElementById('auth-screen').style.display = 'none';
+  document.getElementById('app-screen').style.display = 'block';
+  document.getElementById('user-email').textContent = user.email;
+  subscribeJournal();
+  subscribeDivSims();
+  subscribeSizing();
+  subscribeAturan();
+  subscribeRencana();
+  subscribeDca();
+  subscribeFund();
+}
+
 auth.onAuthStateChanged(user => {
+  if(window.__demoMode) return; // mode demo tidak terpengaruh status login Firebase
   document.getElementById('loading-screen').style.display = 'none';
   if(user){
-    currentUser = user;
-    document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('app-screen').style.display = 'block';
-    document.getElementById('user-email').textContent = user.email;
-    subscribeJournal();
-    subscribeDivSims();
-    subscribeSizing();
-    subscribeAturan();
-    subscribeRencana();
-    subscribeDca();
-    subscribeFund();
+    enterApp(user);
   } else {
     currentUser = null;
     document.getElementById('app-screen').style.display = 'none';
@@ -722,6 +744,8 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeFundManual){ unsubscribeFundManual(); unsubscribeFundManual = null; }
     if(unsubscribeFundPositions){ unsubscribeFundPositions(); unsubscribeFundPositions = null; }
     rencanaAutoRefreshDone = false;
+    // link langsung ke demo: ...?demo
+    if(new URLSearchParams(location.search).has('demo')) enterDemo();
   }
 });
 
@@ -767,7 +791,7 @@ function translateAuthError(code){
   return map[code] || 'Terjadi kesalahan: ' + code;
 }
 
-document.getElementById('btn-logout').addEventListener('click', ()=> auth.signOut());
+document.getElementById('btn-logout').addEventListener('click', ()=> window.__demoMode ? exitDemo() : auth.signOut());
 
 // ---------- TABS ----------
 document.querySelectorAll('.tab').forEach(t=>{
@@ -2792,8 +2816,14 @@ async function fundAnalyze(ticker, kindChoice, onStep){
     if(then <= 0) return now > 0 ? 999 : null; // berbalik untung
     return (now/then - 1)*100;
   };
-  const revYoY = growth(latest.revenue, yearAgo?.revenue);
-  const niYoY = growth(latest.ni, yearAgo?.ni);
+  let revYoY = growth(latest.revenue, yearAgo?.revenue);
+  let niYoY = growth(latest.ni, yearAgo?.ni);
+  // Kalau kuartal yang sama tahun lalu tidak ada di data, bandingkan 12 bulan terakhir dengan tahun buku terakhir
+  const ttmIsNewer = ttmBasis.startsWith('TTM') && latestAnnual && latestAnnual.date < latestDate;
+  const yoyFallback = [];
+  if(niYoY == null && ttmIsNewer && ttmNI != null && latestAnnual.ni != null){ niYoY = growth(ttmNI, latestAnnual.ni); if(niYoY != null) yoyFallback.push('laba'); }
+  if(revYoY == null && ttmIsNewer && ttmRev != null && latestAnnual.revenue != null){ revYoY = growth(ttmRev, latestAnnual.revenue); if(revYoY != null) yoyFallback.push('pendapatan'); }
+  if(yoyFallback.length) warnings.push(`Data ${yoyFallback.join(' dan ')} ${fundQuarterLabel((Number(ly)-1) + '-' + lm + '-' + ld)} tidak tersedia, jadi pertumbuhan ${yoyFallback.join(' dan ')} dihitung dari 12 bulan terakhir dibanding tahun buku ${latestAnnual.date.slice(0,4)}.`);
   const der = (liab != null && equity > 0) ? liab/equity : null;
   const cashQ = (ttmOCF != null && ttmNI > 0) ? ttmOCF/ttmNI : null;
 
@@ -3607,6 +3637,178 @@ function subscribeFund(){
     document.getElementById('fm-list').innerHTML = '<div class="err">Gagal memuat input manual: ' + err.message + '</div>';
   });
 }
+
+// ==================== MODE DEMO ====================
+// Database tiruan di memori browser. Tidak ada yang dikirim ke Firebase,
+// dan semua perubahan hilang saat halaman ditutup atau dimuat ulang.
+function createDemoDb(){
+  const store = new Map();
+  const listeners = new Set();
+  let seq = 0;
+  const notify = () => setTimeout(() => listeners.forEach(l => l()), 0);
+  const clean = (v) => {
+    if(Array.isArray(v)) return v.map(clean);
+    if(v && typeof v === 'object'){
+      const proto = Object.getPrototypeOf(v);
+      if(proto !== Object.prototype && proto !== null) return Date.now(); // sentinel serverTimestamp()
+      const o = {};
+      Object.keys(v).forEach(k => { if(v[k] !== undefined) o[k] = clean(v[k]); });
+      return o;
+    }
+    return v;
+  };
+  const copy = (v) => JSON.parse(JSON.stringify(v));
+  const snapDoc = (path) => {
+    const id = path.split('/').pop();
+    const has = store.has(path);
+    return { id, exists: has, data: () => has ? copy(store.get(path)) : undefined };
+  };
+  function docsIn(path){
+    const prefix = path + '/';
+    return [...store.keys()]
+      .filter(k => k.startsWith(prefix) && !k.slice(prefix.length).includes('/'))
+      .map(snapDoc);
+  }
+  function query(path, filters = [], order = null, lim = null){
+    const run = () => {
+      let docs = docsIn(path).filter(d => filters.every(([f, , v]) => d.data()[f] === v));
+      if(order){
+        const [f, dir] = order;
+        docs.sort((a, b) => {
+          const A = a.data()[f] ?? 0, B = b.data()[f] ?? 0;
+          return (A > B ? 1 : A < B ? -1 : 0) * (dir === 'desc' ? -1 : 1);
+        });
+      }
+      if(lim != null) docs = docs.slice(0, lim);
+      return { docs, empty: docs.length === 0, size: docs.length, forEach: (fn) => docs.forEach(fn) };
+    };
+    return {
+      where: (f, op, v) => query(path, [...filters, [f, op, v]], order, lim),
+      orderBy: (f, dir = 'asc') => query(path, filters, [f, dir], lim),
+      limit: (n) => query(path, filters, order, n),
+      get: () => Promise.resolve(run()),
+      onSnapshot: (cb) => {
+        const l = () => cb(run());
+        listeners.add(l); setTimeout(l, 0);
+        return () => listeners.delete(l);
+      },
+      doc: (id) => docRef(path + '/' + (id || ('demo' + (++seq)))),
+      add: (data) => {
+        const id = 'demo' + (++seq) + Math.random().toString(36).slice(2, 6);
+        store.set(path + '/' + id, clean(data)); notify();
+        return Promise.resolve({ id });
+      }
+    };
+  }
+  function docRef(path){
+    return {
+      id: path.split('/').pop(),
+      collection: (name) => query(path + '/' + name),
+      get: () => Promise.resolve(snapDoc(path)),
+      set: (data, opts) => {
+        const prev = (opts && opts.merge) ? (store.get(path) || {}) : {};
+        store.set(path, { ...prev, ...clean(data) }); notify();
+        return Promise.resolve();
+      },
+      update: (data) => {
+        if(!store.has(path)) return Promise.reject(new Error('Dokumen tidak ditemukan'));
+        store.set(path, { ...store.get(path), ...clean(data) }); notify();
+        return Promise.resolve();
+      },
+      delete: () => { store.delete(path); notify(); return Promise.resolve(); },
+      onSnapshot: (cb) => {
+        const l = () => cb(snapDoc(path));
+        listeners.add(l); setTimeout(l, 0);
+        return () => listeners.delete(l);
+      }
+    };
+  }
+  return { collection: (name) => query(name), _raw: store };
+}
+
+function seedDemoData(demoDb, uid){
+  const base = 'users/' + uid + '/';
+  const put = (path, data) => demoDb._raw.set(base + path, data);
+  const now = Date.now();
+  const daysAgo = (n) => new Date(now - n*86400000).toISOString().slice(0,10);
+  const ts = (n) => now - n*86400000;
+  // Kuartal laporan terakhir yang wajar sudah rilis (~1,5 bulan setelah tutup kuartal) dan kuartal sebelumnya
+  const qEnd = (d) => { const y = d.getFullYear(), q = Math.floor(d.getMonth()/3); return q === 0 ? (y-1) + '-12-31' : fundQuarterEnd(q, y); };
+  const lastQ = qEnd(new Date(now - 45*86400000));
+  const prevQ = qEnd(new Date(new Date(lastQ).getTime() - 10*86400000));
+  const nextLabel = (() => { let [y, m] = lastQ.split('-').map(Number); let q = Math.ceil(m/3) + 1; if(q > 4){ q = 1; y++; } return 'Q' + q + ' ' + y; })();
+
+  put('meta/sizing', { totalModal: 150000000, limits: { blue: 10, menengah: 7, komoditas: 7, spekulatif: 5 } });
+  put('meta/aturanKeuangan', { gaji: 15000000, pengeluaran: 8000000, returnPct: 10, umur: 32, modal: 150000000 });
+
+  // Rencana entry (harga terkini diambil otomatis saat tab dibuka)
+  [
+    { ticker:'BBRI', kategori:'blue', zonaBawah:2800, zonaAtas:2900, sl:2650, tp:3300, alasan:'Pullback ke support mingguan, valuasi di bawah rata-rata 5 tahun.', syarat:['Weekly berbalik naik','Volume beli membesar'], d:3 },
+    { ticker:'ASII', kategori:'blue', zonaBawah:4300, zonaAtas:4450, sl:4100, tp:5000, alasan:'Menunggu harga turun ke area support sebelum masuk.', syarat:['RSI di bawah 40','Ada candle konfirmasi di support'], d:2 },
+    { ticker:'ELSA', kategori:'menengah', zonaBawah:640, zonaAtas:670, sl:600, tp:760, alasan:'Laba tumbuh, retrace ke EMA20 harian.', syarat:['Harga bertahan di atas 640'], d:1 }
+  ].forEach((p, i) => put('entry_plans/demo-rn' + i, { ticker:p.ticker, kategori:p.kategori, zonaBawah:p.zonaBawah, zonaAtas:p.zonaAtas, sl:p.sl, tp:p.tp, alasan:p.alasan, syarat:p.syarat, status:'menunggu', lastPrice:null, lastChecked:null, createdAt: ts(p.d) }));
+
+  // Jurnal trading: open, partial, closed untung, closed rugi
+  [
+    { id:'t1', d:2,  ticker:'PGAS', kategori:'menengah',  entry:1600, sl:1530, tp:1780, lot:40, exits:[], notes:'Breakout dari konsolidasi.' },
+    { id:'t2', d:9,  ticker:'ANTM', kategori:'komoditas', entry:1850, sl:1760, tp:2050, lot:30, exits:[{ id:'e1', lot:15, price:1990, date:daysAgo(4), note:'TP1' }], notes:'Sisa posisi pakai trailing stop.' },
+    { id:'t3', d:20, ticker:'BBNI', kategori:'blue',      entry:4300, sl:4150, tp:4650, lot:20, exits:[{ id:'e2', lot:10, price:4500, date:daysAgo(15), note:'TP1' }, { id:'e3', lot:10, price:4620, date:daysAgo(11), note:'TP2' }], notes:'' },
+    { id:'t4', d:30, ticker:'MDKA', kategori:'komoditas', entry:2200, sl:2080, tp:2450, lot:25, exits:[{ id:'e4', lot:25, price:2080, date:daysAgo(26), note:'Kena SL' }], notes:'Entry terlalu cepat sebelum konfirmasi.' }
+  ].forEach(t => put('risk_trades/demo-' + t.id, { date: daysAgo(t.d), ticker:t.ticker, kategori:t.kategori, entry:t.entry, sl:t.sl, tp:t.tp, lot:t.lot, modal:30000000, riskPct:1, exits:t.exits, notes:t.notes, radarBasis:null, createdAt: ts(t.d) }));
+
+  // Simulasi dividen (rumus sama dengan tab Simulasi Dividen)
+  [
+    { ticker:'BBRI', price:2900, modal:20000000, epsBase:390, payout:80, growth:6, years:5, d:5 },
+    { ticker:'PTBA', price:2600, modal:10000000, epsBase:420, payout:75, growth:0, years:5, d:12 }
+  ].forEach((s, i) => {
+    const shares = Math.floor(s.modal / s.price / 100) * 100;
+    let total = 0, yoc = 0;
+    for(let y = 1; y <= s.years; y++){
+      const dps = s.epsBase * Math.pow(1 + s.growth/100, y) * (s.payout/100);
+      total += dps * shares; yoc = dps / s.price * 100;
+    }
+    put('dividend_sims/demo-dv' + i, { date: daysAgo(s.d), ticker:s.ticker, price:s.price, modal:s.modal, epsBase:s.epsBase, payout:s.payout, growth:s.growth, years:s.years, totalDividend: total, finalYoc: yoc, createdAt: ts(s.d) });
+  });
+
+  // Riwayat Timing DCA
+  put('dca_analysis/demo-dca1', { ticker:'ADRO', date: daysAgo(3), currentPrice:2460, zoneLow:2300, zoneHigh:2380, score:2, verdictClass:'v-expensive', weeklyTrend:'bullish', createdAt: ts(3) });
+  put('dca_analysis/demo-dca2', { ticker:'ELSA', date: daysAgo(1), currentPrice:665, zoneLow:640, zoneHigh:672, score:4, verdictClass:'v-strong', weeklyTrend:'bullish', createdAt: ts(1) });
+
+  // Riwayat cek fundamental + posisi
+  const fh = (o) => put('fund_history/' + o.ticker + '_' + o.period, Object.assign({
+    kindAuto: true, source: 'yahoo', trendComparable: true, gates: [], gateCount: 0,
+    nextReportLabel: nextLabel, nextReportDue: false, savedDate: daysAgo(1), updatedAt: ts(1)
+  }, o, { label: fundLabel(o.score).text, gateCount: (o.gates || []).length }));
+  fh({ ticker:'BBRI', period: prevQ, kind:'bank', score:8.3, scored:6, valStatus:'murah', valPct:12, saran:'Kandidat, tapi tunggu Weekly berbalik', saranCls:'v-expensive', price:3050, roe:19.0, niYoY:9.5, revYoY:6.1, per:8.1, pbv:1.45, weeklyTrend:'bearish', trend:null, supportLevels:[2950, 2800], eps:376, bvps:2100, savedDate: daysAgo(95) });
+  fh({ ticker:'BBRI', period: lastQ, kind:'bank', score:9.2, scored:6, valStatus:'murah', valPct:8, saran:'Kandidat, tapi tunggu Weekly berbalik', saranCls:'v-expensive', price:2910, roe:19.2, niYoY:12.4, revYoY:8.8, per:7.4, pbv:1.36, weeklyTrend:'bearish', trend:'stabil', supportLevels:[2850, 2700], eps:393, bvps:2140 });
+  fh({ ticker:'ELSA', period: lastQ, kind:'umum', score:8.0, scored:5, valStatus:'wajar', valPct:48, saran:'Kandidat tambah posisi', saranCls:'v-strong', price:665, roe:15.7, niYoY:63.6, revYoY:22.6, per:5.9, pbv:0.89, weeklyTrend:'bullish', trend:null, supportLevels:[640, 610], eps:113, bvps:747 });
+  fh({ ticker:'ADRO', period: lastQ, kind:'komoditas', score:9.0, scored:5, valStatus:'mahal', valPct:79, saran:'Tahan, jangan tambah dulu', saranCls:'v-expensive', price:2460, roe:12.7, niYoY:84.5, revYoY:11.0, per:6.7, pbv:0.85, weeklyTrend:'bullish', trend:null, supportLevels:[2300, 2180], eps:367, bvps:2894, gates:['Valuasi di zona atas sejarahnya sendiri (lebih mahal dari 79% periode 5 tahun terakhir).'] });
+  fh({ ticker:'ASII', period: lastQ, kind:'umum', score:5.0, scored:5, valStatus:'murah', valPct:15, saran:'Pantau saja', saranCls:'v-mid', price:4550, roe:13.1, niYoY:-8.2, revYoY:-2.4, per:6.2, pbv:0.82, weeklyTrend:'bearish', trend:null, supportLevels:[4400, 4200], eps:734, bvps:5550, savedDate: daysAgo(9) });
+  put('fund_positions/BBRI', { ticker:'BBRI', lot:10, avgPrice:3380, kategori:'blue', updatedAt: ts(20) });
+  put('fund_positions/ELSA', { ticker:'ELSA', lot:20, avgPrice:720, kategori:'menengah', updatedAt: ts(20) });
+  put('fund_positions/ASII', { ticker:'ASII', lot:5, avgPrice:6200, kategori:'blue', updatedAt: ts(20) });
+}
+
+function enterDemo(){
+  if(window.__demoMode) return;
+  window.__demoMode = true;
+  const demoUser = { uid: 'demo', email: 'Mode demo' };
+  db = createDemoDb();
+  seedDemoData(db, demoUser.uid);
+  document.getElementById('loading-screen').style.display = 'none';
+  document.getElementById('demo-banner').style.display = 'flex';
+  enterApp(demoUser);
+  window.scrollTo({ top: 0 });
+}
+
+function exitDemo(){
+  const url = new URL(location.href);
+  url.searchParams.delete('demo');
+  location.href = url.toString();
+}
+
+document.getElementById('btn-demo').addEventListener('click', enterDemo);
+document.getElementById('btn-demo-exit').addEventListener('click', exitDemo);
 </script>
 </body>
 </html>
