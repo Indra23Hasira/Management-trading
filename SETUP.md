@@ -1,47 +1,38 @@
-# Setup Risk Calculator (versi Firebase)
+# Setup & Keamanan — Management Trading
 
-## 1. Isi konfigurasi Firebase
-Buka `index.html`, cari bagian ini di dekat atas `<script>` paling bawah:
+Aplikasi satu file (`index.html`) di GitHub Pages, dengan Firebase Authentication (email/password) dan Firestore untuk menyimpan data per pengguna.
 
-```js
-const firebaseConfig = {
-  apiKey: "GANTI_DENGAN_API_KEY",
-  authDomain: "GANTI.firebaseapp.com",
-  projectId: "GANTI_PROJECT_ID",
-  storageBucket: "GANTI.appspot.com",
-  messagingSenderId: "GANTI",
-  appId: "GANTI"
-};
-```
+## Coba tanpa akun
 
-Ganti dengan config dari project Firebase kamu (Project settings > General > Your apps > SDK setup and config).
+Buka aplikasi dengan `?demo` di akhir alamat, atau klik **Coba versi demo** di halaman login.
+Mode demo memakai database tiruan di memori browser dengan data contoh. SDK Firebase tidak dimuat sama sekali, tidak ada data yang dikirim ke server, dan sesi login yang ada di browser tidak dibaca.
 
-**Bisa pakai project Firebase yang sama dengan Monthly-budget.** Datanya otomatis terpisah karena disimpan di collection `users/{uid}/risk_trades`, tidak akan tercampur dengan data budget tracker kamu. Tidak perlu bikin project baru.
+## Struktur data
 
-## 2. Aktifkan Email/Password Authentication
-Di Firebase Console: **Authentication > Sign-in method > Email/Password > Enable**.
-(Kalau sudah aktif untuk Monthly-budget, berarti sudah aktif juga di sini karena satu project.)
+Semua data pengguna tersimpan di bawah `users/{uid}/`:
 
-## 3. Set Firestore Security Rules
-Ini bagian penting — supaya data kamu tidak bisa diakses/diubah orang lain. Buka **Firestore Database > Rules**, pastikan ada rule seperti ini:
+| Koleksi | Dipakai di tab |
+|---|---|
+| `entry_plans` | Rencana Entry |
+| `risk_trades` | Jurnal Trading |
+| `dividend_sims` | Simulasi Dividen |
+| `dca_analysis` | Timing DCA |
+| `fund_history`, `fund_manual`, `fund_positions` | Cek Fundamental |
+| `meta/sizing`, `meta/aturanKeuangan` | Batas Posisi, Aturan Keuangan |
 
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{userId}/risk_trades/{tradeId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-  }
-}
-```
+## Keamanan
 
-Kalau kamu sudah punya rules untuk collection lain (misal budget tracker), tinggal tambahkan blok `match /users/{userId}/risk_trades/{tradeId}` ini di dalam blok `match /databases/{database}/documents { ... }` yang sudah ada. Jangan menimpa rules yang lama.
+- **Firestore rules** ada di [`firestore.rules`](firestore.rules). Setiap pengguna hanya bisa membaca dan menulis `users/{uid}` miliknya sendiri (dicek lewat UID login). Koleksi yang tidak terdaftar dan akses tanpa login otomatis ditolak.
+  Rules di repo tidak aktif sendiri. Setelah diubah, salin isinya ke Firebase Console → Firestore Database → Rules → **Publish**.
+- **Konfigurasi Firebase di `index.html` bukan rahasia.** Konfigurasi web Firebase memang dikirim ke browser. Kuncinya dibatasi di Google Cloud Console supaya hanya diterima dari `https://indra23hasira.github.io/*`. Keamanan data dijaga oleh rules di atas.
+- **Data harga Yahoo Finance** diambil lewat Cloudflare Worker milik sendiri (`yahoo-proxy`), yang hanya meneruskan permintaan GET ke `query1`/`query2.finance.yahoo.com` dan hanya melayani origin GitHub Pages ini. Proxy publik hanya dipakai sebagai cadangan kalau Worker gagal.
+- **Teks dari pengguna** (catatan, alasan, ticker) di-escape sebelum ditampilkan, dan ticker dibatasi ke huruf dan angka.
+- **Koneksi ke Radar IDX** (opsional, untuk bantu isi SL/TP) hanya membaca data dari project Firebase `radar-idx-hasira` dengan login akun Radar. Fitur ini tidak tersedia di mode demo.
 
-Soal API key yang kena Secret Scanning alert kemarin: itu wajar untuk aplikasi web client-side seperti ini — Firebase API key memang didesain untuk dikirim ke browser, bukan rahasia seperti password. Yang benar-benar menjaga keamanan data adalah **Security Rules** di atas, bukan menyembunyikan API key. Selama rules-nya sudah membatasi akses per-user seperti contoh di atas, aman untuk di-commit ke GitHub.
+## Menjalankan sendiri
 
-## 4. Deploy ke GitHub Pages
-Sama seperti Monthly-budget: upload `index.html` ke repo, aktifkan GitHub Pages dari branch tersebut.
-
-## 5. Pertama kali pakai
-Buka aplikasinya di browser (PC atau HP) → klik "Daftar di sini" → isi email + password → otomatis login. Login yang sama dipakai baik dari PC maupun HP, datanya otomatis sinkron real-time karena disimpan di Firestore.
+1. Buat project Firebase, aktifkan **Authentication → Email/Password** dan **Firestore Database**.
+2. Ganti `firebaseConfig` di `index.html` dengan konfigurasi web project kamu.
+3. Publish isi `firestore.rules` di Firebase Console.
+4. Batasi API key ke domain hosting kamu (Google Cloud Console → APIs & Services → Credentials).
+5. Hosting `index.html`, `manifest.json`, dan ikon di GitHub Pages atau hosting statis lain.

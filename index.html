@@ -548,18 +548,15 @@
   </div>
 </div>
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<!-- Firebase SDK dimuat lewat loadFirebaseSdk() di bagian BOOT, tidak dimuat sama sekali di mode demo -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 
 <script>
 /* ============================================================
-   GANTI KONFIGURASI INI DENGAN FIREBASE PROJECT KAMU SENDIRI
-   (Project settings > General > Your apps > SDK setup and config)
-   Bisa pakai project Firebase yang sama dengan Monthly-budget,
-   collection-nya sudah dipisah otomatis: users/{uid}/risk_trades
+   KONFIGURASI FIREBASE (project management-trading)
+   Ini konfigurasi web publik, bukan rahasia. Keamanan data dijaga oleh
+   firestore.rules (setiap pengguna hanya bisa mengakses users/{uid}
+   miliknya sendiri) dan kunci yang dibatasi ke domain GitHub Pages.
    ============================================================ */
 const firebaseConfig = {
   apiKey: "AIzaSyA3n0UvMY2YeiqvtlpGyhvXyAeURZ-rdfc",
@@ -570,9 +567,9 @@ const firebaseConfig = {
   appId: "1:663022225344:web:5a41b571b4e27047f52a25"
 };
 
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-let db = firebase.firestore(); // diganti database tiruan saat mode demo
+// Diisi oleh initFirebase() setelah SDK dimuat; di mode demo db diganti database tiruan
+let auth = null;
+let db = null;
 
 /* ============================================================
    KONEKSI KEDUA — READ-ONLY KE PROJECT RADAR IDX
@@ -588,16 +585,14 @@ const radarFirebaseConfig = {
   messagingSenderId: "675342054884",
   appId: "1:675342054884:web:cd557eacc3b1da649c03f1"
 };
-const radarApp = firebase.initializeApp(radarFirebaseConfig, 'radarApp');
-const radarAuth = radarApp.auth();
-const radarDb = radarApp.firestore();
+let radarApp = null, radarAuth = null, radarDb = null;
 let radarReady = false;
 
-radarAuth.onAuthStateChanged(user => {
+function handleRadarAuthState(user){
   radarReady = !!user;
   const badge = document.getElementById('radar-conn-badge');
   if(badge) badge.textContent = radarReady ? '🟢 Terhubung ke Radar' : '⚪ Belum terhubung ke Radar';
-});
+}
 
 async function ensureRadarLogin(){
   if(window.__demoMode){
@@ -707,6 +702,15 @@ const SIZING_CATS = [
   { key:'spekulatif', label:'Spekulatif' }
 ];
 
+function serverTs(){ return window.__demoMode ? Date.now() : firebase.firestore.FieldValue.serverTimestamp(); }
+
+// Escape teks sebelum dimasukkan ke innerHTML (catatan, alasan, ticker, pesan error, dll.)
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+// Ticker IDX hanya huruf & angka
+function cleanTicker(v){ return String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+
 function fmtRp(n){ return 'Rp' + Math.round(n).toLocaleString('id-ID'); }
 function fmtNum(n){ return Math.round(n).toLocaleString('id-ID'); }
 
@@ -725,7 +729,7 @@ function enterApp(user){
   subscribeFund();
 }
 
-auth.onAuthStateChanged(user => {
+function handleAuthState(user){
   if(window.__demoMode) return; // mode demo tidak terpengaruh status login Firebase
   document.getElementById('loading-screen').style.display = 'none';
   if(user){
@@ -744,10 +748,8 @@ auth.onAuthStateChanged(user => {
     if(unsubscribeFundManual){ unsubscribeFundManual(); unsubscribeFundManual = null; }
     if(unsubscribeFundPositions){ unsubscribeFundPositions(); unsubscribeFundPositions = null; }
     rencanaAutoRefreshDone = false;
-    // link langsung ke demo: ...?demo
-    if(new URLSearchParams(location.search).has('demo')) enterDemo();
   }
-});
+}
 
 document.getElementById('auth-toggle').addEventListener('click', ()=>{
   isRegisterMode = !isRegisterMode;
@@ -809,7 +811,7 @@ let currentRadarSnapshot = null;
 window.__radarBasisUsed = null;
 
 document.getElementById('btn-fetch-radar').addEventListener('click', async () => {
-  const ticker = document.getElementById('in-ticker').value.trim().toUpperCase();
+  const ticker = cleanTicker(document.getElementById('in-ticker').value);
   if(!ticker){ alert('Isi ticker dulu.'); return; }
   const btn = document.getElementById('btn-fetch-radar');
   btn.disabled = true; btn.textContent = 'Mengambil...';
@@ -824,7 +826,7 @@ document.getElementById('btn-fetch-radar').addEventListener('click', async () =>
 function renderRadarSnapshotBox(snap){
   const box = document.getElementById('radar-snapshot-box');
   if(!snap.found){
-    box.innerHTML = `<div class="warn">Ticker ${snap.ticker} tidak ketemu di data Radar (per ${snap.date}). Isi SL/TP manual seperti biasa.</div>`;
+    box.innerHTML = `<div class="warn">Ticker ${esc(snap.ticker)} tidak ketemu di data Radar (per ${snap.date}). Isi SL/TP manual seperti biasa.</div>`;
     document.getElementById('radar-basis-box').innerHTML = '';
     return;
   }
@@ -965,7 +967,7 @@ function runCalc(){
   errBox.innerHTML = '';
   resultBox.style.display = 'none';
 
-  const ticker = document.getElementById('in-ticker').value.trim().toUpperCase() || '-';
+  const ticker = cleanTicker(document.getElementById('in-ticker').value) || '-';
   const kategori = document.getElementById('in-kategori').value;
   const modal = parseFloat(document.getElementById('in-modal').value);
   const entry = parseFloat(document.getElementById('in-entry').value);
@@ -1088,24 +1090,54 @@ function subscribeRencana(){
   }, err => console.error(err));
 }
 
-async function fetchYahooPrice(ticker){
-  const symbol = ticker.toUpperCase() + '.JK';
-  const target = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1d&interval=1d';
-  const proxies = [
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(target),
-    'https://corsproxy.io/?url=' + encodeURIComponent(target)
+// ---------- Ambil data Yahoo Finance ----------
+// Utama: Cloudflare Worker milik sendiri (hanya meneruskan GET ke query1/query2.finance.yahoo.com
+// dan hanya melayani origin indra23hasira.github.io). Proxy publik hanya cadangan kalau Worker gagal.
+const YAHOO_WORKER = 'https://yahoo-proxy.indraanggriawan17.workers.dev/?url=';
+function yahooProxyList(yahooUrl){
+  const enc = encodeURIComponent(yahooUrl);
+  return [
+    { url: YAHOO_WORKER + enc, mode: 'plain' },
+    { url: `https://r.jina.ai/${yahooUrl.replace(/&/g, '%26')}`, mode: 'jina' },
+    { url: `https://api.allorigins.win/raw?url=${enc}`, mode: 'plain' },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, mode: 'plain' },
+    { url: `https://corsproxy.io/?url=${enc}`, mode: 'plain' },
+    { url: `https://api.allorigins.win/get?url=${enc}`, mode: 'wrapped' } // hasil dibungkus {contents: "..."}
   ];
-  for(const url of proxies){
+}
+async function fetchYahooJson(yahooUrl, validate, timeoutMs = 12000){
+  let lastErr = null;
+  for(const proxy of yahooProxyList(yahooUrl)){
     try{
-      const res = await fetch(url);
-      if(!res.ok) continue;
-      const data = await res.json();
-      const price = data && data.chart && data.chart.result && data.chart.result[0]
-        && data.chart.result[0].meta && data.chart.result[0].meta.regularMarketPrice;
-      if(price) return price;
-    }catch(e){ continue; }
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(proxy.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      let data;
+      if(proxy.mode === 'wrapped'){ const w = await res.json(); data = JSON.parse(w.contents); }
+      else if(proxy.mode === 'jina'){
+        // r.jina.ai membungkus hasil dengan teks "Title:...Markdown Content:" sebelum JSON aslinya
+        const text = await res.text();
+        const i = text.indexOf('{');
+        if(i === -1) throw new Error('Format respons proxy tidak dikenali');
+        data = JSON.parse(text.slice(i));
+      } else data = await res.json();
+      if(validate && !validate(data)) throw new Error('Data tidak ditemukan untuk ticker ini.');
+      return data;
+    }catch(e){ lastErr = e; }
   }
-  return null;
+  throw new Error(lastErr ? (lastErr.name === 'AbortError' ? 'Semua proxy timeout (jaringan lambat/diblokir).' : lastErr.message) : 'Gagal mengambil data.');
+}
+const hasChart = (d) => !!d?.chart?.result?.[0];
+
+async function fetchYahooPrice(ticker){
+  const symbol = cleanTicker(ticker) + '.JK';
+  const target = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1d&interval=1d';
+  try{
+    const data = await fetchYahooJson(target, hasChart, 10000);
+    return data.chart.result[0].meta?.regularMarketPrice || null;
+  }catch(e){ return null; }
 }
 
 function computeRencanaStatus(plan, price){
@@ -1138,7 +1170,7 @@ document.getElementById('btn-refresh-prices').addEventListener('click', refreshA
 document.getElementById('btn-save-rencana').addEventListener('click', async ()=>{
   const errBox = document.getElementById('rn-err-box');
   errBox.innerHTML = '';
-  const ticker = document.getElementById('rn-ticker').value.trim().toUpperCase();
+  const ticker = cleanTicker(document.getElementById('rn-ticker').value);
   const kategori = document.getElementById('rn-kategori').value;
   const zonaBawah = parseFloat(document.getElementById('rn-zona-bawah').value);
   const zonaAtas = parseFloat(document.getElementById('rn-zona-atas').value);
@@ -1163,12 +1195,12 @@ document.getElementById('btn-save-rencana').addEventListener('click', async ()=>
       await rencanaRef().doc(editingRencanaId).update(payload);
       cancelEditRencana();
     } else {
-      await rencanaRef().add(Object.assign({ status: 'menunggu', lastPrice: null, lastChecked: null, createdAt: firebase.firestore.FieldValue.serverTimestamp() }, payload));
+      await rencanaRef().add(Object.assign({ status: 'menunggu', lastPrice: null, lastChecked: null, createdAt: serverTs() }, payload));
       clearRencanaForm();
     }
     refreshAllPrices();
   }catch(e){
-    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + esc(e.message) + '</div>';
   }
 });
 
@@ -1251,18 +1283,18 @@ function renderRencanaList(){
       ? `Harga saat ini: <b>${fmtRp(plan.lastPrice)}</b>` + (plan.lastChecked ? ` <span style="color:var(--text-muted);">(cek ${new Date(plan.lastChecked).toLocaleString('id-ID')})</span>` : '')
       : '<span style="color:var(--text-muted);">Harga belum dicek</span>';
     const syaratHtml = (plan.syarat && plan.syarat.length)
-      ? '<ul style="margin:6px 0 0 18px; padding:0; font-size:13px; color:var(--text-muted);">' + plan.syarat.map(s=>`<li>${s}</li>`).join('') + '</ul>'
+      ? '<ul style="margin:6px 0 0 18px; padding:0; font-size:13px; color:var(--text-muted);">' + plan.syarat.map(s=>`<li>${esc(s)}</li>`).join('') + '</ul>'
       : '';
     const showActionButtons = plan.status !== 'dieksekusi' && plan.status !== 'batal';
     return `
       <div class="card" style="margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
           <div>
-            <div style="font-size:16px; font-weight:700;">${plan.ticker} <span style="font-weight:400; font-size:12px; color:var(--text-muted);">${catLabel}</span></div>
+            <div style="font-size:16px; font-weight:700;">${esc(plan.ticker)} <span style="font-weight:400; font-size:12px; color:var(--text-muted);">${catLabel}</span></div>
             <div style="font-size:13px; margin-top:4px;">Zona entry: <b>${fmtRp(plan.zonaBawah)} – ${fmtRp(plan.zonaAtas)}</b></div>
             ${plan.sl!=null || plan.tp!=null ? `<div style="font-size:13px; color:var(--text-muted);">${plan.sl!=null?('SL '+fmtRp(plan.sl)):''}${plan.sl!=null && plan.tp!=null?' · ':''}${plan.tp!=null?('TP '+fmtRp(plan.tp)):''}</div>` : ''}
             <div style="font-size:13px; margin-top:6px;">${priceInfo}</div>
-            ${plan.alasan ? `<div style="font-size:13px; color:var(--text-muted); margin-top:6px;">${plan.alasan}</div>` : ''}
+            ${plan.alasan ? `<div style="font-size:13px; color:var(--text-muted); margin-top:6px;">${esc(plan.alasan)}</div>` : ''}
             ${syaratHtml}
           </div>
           <span class="j-status ${st.cls}">${st.label}</span>
@@ -1537,7 +1569,7 @@ async function saveToJournal(){
       exits: [],
       notes: '',
       radarBasis: radarBasis,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      createdAt: serverTs()
     });
     btn.textContent = 'Tersimpan ke jurnal ✓';
     setTimeout(()=>{ btn.textContent = 'Simpan ke jurnal'; btn.disabled = false; }, 2000);
@@ -1577,7 +1609,7 @@ async function checkRadarAlerts(){
   const rest = rows.filter(r => !r.triggered);
   let html = '';
   if(alerts.length){
-    html += alerts.map(r => `<div class="warn" style="margin-bottom:8px;">⚠ <b>${r.ticker}</b> — Score ${r.entrySnap.totalScore??'-'} → ${r.cur.totalScore??'-'}${r.scoreDrop!=null?` (turun ${r.scoreDrop})`:''}, Match ${r.cur.matchCount??'-'}/4. Pertimbangkan review posisi.</div>`).join('');
+    html += alerts.map(r => `<div class="warn" style="margin-bottom:8px;">⚠ <b>${esc(r.ticker)}</b> — Score ${r.entrySnap.totalScore??'-'} → ${r.cur.totalScore??'-'}${r.scoreDrop!=null?` (turun ${r.scoreDrop})`:''}, Match ${r.cur.matchCount??'-'}/4. Pertimbangkan review posisi.</div>`).join('');
   }
   if(rest.length){
     html += `<div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Aman: ${rest.map(r=>r.ticker).join(', ')}</div>`;
@@ -1593,7 +1625,7 @@ function subscribeJournal(){
     renderSizingUsage();
   }, err => {
     console.error(err);
-    document.getElementById('journal-list').innerHTML = '<div class="err">Gagal memuat jurnal: ' + err.message + '</div>';
+    document.getElementById('journal-list').innerHTML = '<div class="err">Gagal memuat jurnal: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -1702,7 +1734,7 @@ function renderJournal(){
           const xPnl = Number(x.lot) * 100 * (Number(x.price) - e.entry);
           return `
           <div class="exit-row">
-            <span class="info">${x.lot} lot @${fmtNum(x.price)} &middot; ${x.date}${x.note ? ' &middot; '+x.note : ''}</span>
+            <span class="info">${x.lot} lot @${fmtNum(x.price)} &middot; ${esc(x.date)}${x.note ? ' &middot; '+esc(x.note) : ''}</span>
             <span style="display:flex; align-items:center; gap:6px;">
               <span class="pnl" style="color:${xPnl>=0?'var(--green)':'var(--red)'}">${xPnl>=0?'+':''}${fmtRp(xPnl)}</span>
               ${x.id !== 'legacy' ? `<button data-action="delete-exit" data-id="${e.id}" data-exit-id="${x.id}" title="Hapus exit ini">&times;</button>` : ''}
@@ -1715,7 +1747,7 @@ function renderJournal(){
     return `
       <div class="j-entry">
         <div class="j-top">
-          <div><span class="j-ticker">${e.ticker}</span><span class="j-date" style="margin-left:8px;">${e.date}</span>${e.kategori ? `<span class="j-date" style="margin-left:8px;">&middot; ${(SIZING_CATS.find(c=>c.key===e.kategori)||{label:e.kategori}).label}</span>` : ''}</div>
+          <div><span class="j-ticker">${esc(e.ticker)}</span><span class="j-date" style="margin-left:8px;">${esc(e.date)}</span>${e.kategori ? `<span class="j-date" style="margin-left:8px;">&middot; ${(SIZING_CATS.find(c=>c.key===e.kategori)||{label:e.kategori}).label}</span>` : ''}</div>
           <span class="j-status ${statusClass}">${statusLabel}</span>
         </div>
         <div class="j-grid">
@@ -1727,7 +1759,7 @@ function renderJournal(){
         <div class="remaining-badge">Sisa posisi: ${fmtNum(remaining)} lot dari ${fmtNum(e.lot)} lot</div>
         ${exitListHtml}
         ${pnl !== null ? `<div style="font-size:12px; margin-bottom:10px;">Total P/L terealisasi: <span style="font-family:var(--mono); font-weight:700; color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmtRp(pnl)}</span></div>` : ''}
-        ${e.notes ? `<div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">${e.notes}</div>` : ''}
+        ${e.notes ? `<div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">${esc(e.notes)}</div>` : ''}
         <div class="j-actions">
           ${remaining > 0 ? `<button data-action="sell" data-id="${e.id}">Jual sebagian</button>` : ''}
           <button data-action="edit" data-id="${e.id}">Edit</button>
@@ -1785,7 +1817,7 @@ document.getElementById('btn-save-edit').addEventListener('click', async ()=>{
   btn.disabled = true;
   try{
     await journalRef().doc(editingId).update({
-      ticker: document.getElementById('edit-ticker').value.trim().toUpperCase(),
+      ticker: cleanTicker(document.getElementById('edit-ticker').value),
       entry: parseFloat(document.getElementById('edit-entry').value),
       sl: parseFloat(document.getElementById('edit-sl').value),
       tp: parseFloat(document.getElementById('edit-tp').value),
@@ -1832,7 +1864,7 @@ function runDivCalc(){
   errBox.innerHTML = '';
   resultBox.style.display = 'none';
 
-  const ticker = document.getElementById('dv-ticker').value.trim().toUpperCase() || '-';
+  const ticker = cleanTicker(document.getElementById('dv-ticker').value) || '-';
   const price = parseFloat(document.getElementById('dv-price').value);
   const modal = parseFloat(document.getElementById('dv-modal').value);
   const epsBase = parseFloat(document.getElementById('dv-eps').value);
@@ -1893,7 +1925,7 @@ function renderDivResult(sim){
   resultBox.innerHTML = `
     <div class="card">
       <div class="result-hero">
-        <div class="label">Total dividen ${sim.years} tahun &middot; ${sim.ticker}</div>
+        <div class="label">Total dividen ${sim.years} tahun &middot; ${esc(sim.ticker)}</div>
         <div class="value">${fmtRp(sim.totalDividend)}</div>
         <div class="sub">${fmtNum(sim.shares)} lembar &middot; entry ${fmtRp(sim.price)}</div>
       </div>
@@ -1958,7 +1990,7 @@ async function saveDivSim(){
       years: dvCurrentSim.years,
       totalDividend: dvCurrentSim.totalDividend,
       finalYoc: dvCurrentSim.finalYoc,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      createdAt: serverTs()
     });
     btn.textContent = 'Tersimpan ke jurnal ✓';
     setTimeout(()=>{ btn.textContent = 'Simpan simulasi ini'; btn.disabled = false; }, 2000);
@@ -1975,7 +2007,7 @@ function subscribeDivSims(){
     renderDivSimList();
   }, err => {
     console.error(err);
-    document.getElementById('dv-saved-list').innerHTML = '<div class="err">Gagal memuat simulasi: ' + err.message + '</div>';
+    document.getElementById('dv-saved-list').innerHTML = '<div class="err">Gagal memuat simulasi: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -1988,7 +2020,7 @@ function renderDivSimList(){
   container.innerHTML = divSimCache.map(s => `
     <div class="j-entry">
       <div class="j-top">
-        <div><span class="j-ticker">${s.ticker}</span><span class="j-date" style="margin-left:8px;">${s.date}</span></div>
+        <div><span class="j-ticker">${esc(s.ticker)}</span><span class="j-date" style="margin-left:8px;">${esc(s.date)}</span></div>
         <span class="j-status status-manual">${s.years} thn</span>
       </div>
       <div class="j-grid">
@@ -2040,7 +2072,7 @@ document.getElementById('btn-save-edit-div').addEventListener('click', async ()=
   errBox.innerHTML = '';
   if(!editingDivSimId) return;
 
-  const ticker = document.getElementById('edit-dv-ticker').value.trim().toUpperCase() || '-';
+  const ticker = cleanTicker(document.getElementById('edit-dv-ticker').value) || '-';
   const price = parseFloat(document.getElementById('edit-dv-price').value);
   const modal = parseFloat(document.getElementById('edit-dv-modal').value);
   const epsBase = parseFloat(document.getElementById('edit-dv-eps').value);
@@ -2081,7 +2113,7 @@ document.getElementById('btn-save-edit-div').addEventListener('click', async ()=
     });
     document.getElementById('edit-div-modal').classList.remove('show');
   }catch(e){
-    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + esc(e.message) + '</div>';
   }
   btn.disabled = false;
 });
@@ -2117,7 +2149,7 @@ document.getElementById('btn-save-exit').addEventListener('click', async ()=>{
     await journalRef().doc(exitingTradeId).update({ exits: updatedExits });
     document.getElementById('exit-modal').classList.remove('show');
   }catch(e){
-    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + esc(e.message) + '</div>';
   }
   btn.disabled = false;
 });
@@ -2130,59 +2162,23 @@ function dcaRef(){
 
 // --- Ambil data harga historis dari Yahoo Finance (via CORS proxy) ---
 async function fetchYahooCandles(ticker, interval='1d', range='6mo'){
-  const symbol = ticker.toUpperCase() + '.JK';
+  const symbol = cleanTicker(ticker) + '.JK';
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`;
-  const enc = encodeURIComponent(yahooUrl);
-  const jinaTarget = yahooUrl.replace(/&/g, '%26');
-  const proxies = [
-    { url: `https://r.jina.ai/${jinaTarget}`, mode: 'jina' },
-    { url: `https://api.allorigins.win/raw?url=${enc}`, mode: 'plain' },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, mode: 'plain' },
-    { url: `https://corsproxy.io/?url=${enc}`, mode: 'plain' },
-    { url: `https://api.allorigins.win/get?url=${enc}`, mode: 'wrapped' } // format beda: hasil dibungkus {contents: "..."}
-  ];
-  let lastErr = null;
-  for(const proxy of proxies){
-    try{
-      const controller = new AbortController();
-      const timeoutId = setTimeout(()=> controller.abort(), 10000);
-      const res = await fetch(proxy.url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      let data;
-      if(proxy.mode === 'wrapped'){
-        const wrapper = await res.json();
-        data = JSON.parse(wrapper.contents);
-      } else if(proxy.mode === 'jina'){
-        // r.jina.ai membungkus hasil dengan teks "Title:...URL Source:...Markdown Content:" sebelum JSON aslinya
-        const text = await res.text();
-        const jsonStart = text.indexOf('{');
-        if(jsonStart === -1) throw new Error('Format respons proxy tidak dikenali');
-        data = JSON.parse(text.slice(jsonStart));
-      } else {
-        data = await res.json();
-      }
-      const result = data?.chart?.result?.[0];
-      if(!result) throw new Error('Data tidak ditemukan untuk ticker ini.');
-      const ts = result.timestamp;
-      const quote = result.indicators.quote[0];
-      const candles = [];
-      for(let i=0; i<ts.length; i++){
-        if(quote.close[i] == null) continue;
-        candles.push({
-          date: new Date(ts[i]*1000).toISOString().slice(0,10),
-          open: quote.open[i], high: quote.high[i], low: quote.low[i],
-          close: quote.close[i], volume: quote.volume[i]
-        });
-      }
-      if(candles.length < 30) throw new Error('Data historis terlalu sedikit.');
-      return candles;
-    }catch(e){
-      lastErr = e;
-      continue;
-    }
+  const data = await fetchYahooJson(yahooUrl, hasChart, 10000);
+  const result = data.chart.result[0];
+  const ts = result.timestamp || [];
+  const quote = result.indicators.quote[0];
+  const candles = [];
+  for(let i=0; i<ts.length; i++){
+    if(quote.close[i] == null) continue;
+    candles.push({
+      date: new Date(ts[i]*1000).toISOString().slice(0,10),
+      open: quote.open[i], high: quote.high[i], low: quote.low[i],
+      close: quote.close[i], volume: quote.volume[i]
+    });
   }
-  throw new Error(lastErr ? (lastErr.name === 'AbortError' ? 'Semua proxy timeout (jaringan lambat/diblokir).' : lastErr.message) : 'Gagal mengambil data harga.');
+  if(candles.length < 30) throw new Error('Data historis terlalu sedikit.');
+  return candles;
 }
 
 // --- Indikator teknikal ---
@@ -2370,7 +2366,7 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
   const resultBox = document.getElementById('dca-result-box');
   errBox.innerHTML = '';
   resultBox.style.display = 'none';
-  const ticker = document.getElementById('dca-ticker').value.trim().toUpperCase();
+  const ticker = cleanTicker(document.getElementById('dca-ticker').value);
   if(!ticker){
     errBox.innerHTML = '<div class="err">Ticker harus diisi.</div>';
     return;
@@ -2430,7 +2426,7 @@ document.getElementById('btn-dca-analyze').addEventListener('click', async ()=>{
     if(rateLimited) extra = ' Ini biasanya karena layanan proxy gratis lagi dibatasi (rate limit) akibat kebanyakan cek dalam waktu singkat. Tunggu 30-60 detik lalu coba lagi.';
     else if(networkBlocked) extra = ' Semua proxy gratis yang dicoba gagal dihubungi (server proxy down, atau diblokir jaringan/ekstensi browser kamu). Coba matikan ad-blocker/VPN sebentar, ganti jaringan (WiFi ke data seluler atau sebaliknya), atau coba lagi beberapa menit lagi.';
     else extra = ' Coba lagi beberapa saat, atau cek ticker-nya sudah benar (tanpa .JK).';
-    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + e.message + extra + '</div>';
+    errBox.innerHTML = '<div class="err">Gagal menganalisa: ' + esc(e.message) + extra + '</div>';
   }
   btn.disabled = false;
   btn.textContent = 'Analisa';
@@ -2459,7 +2455,7 @@ async function saveDcaAnalysis(){
     if(!existingSnap.empty){
       await dcaRef().doc(existingSnap.docs[0].id).update(payload);
     } else {
-      await dcaRef().add({ ...payload, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      await dcaRef().add({ ...payload, createdAt: serverTs() });
     }
     btn.textContent = 'Tersimpan ✓';
     setTimeout(()=>{ btn.textContent = 'Simpan analisa ini'; btn.disabled = false; }, 2000);
@@ -2478,7 +2474,7 @@ function subscribeDca(){
     dcaCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderDcaList();
   }, err => {
-    document.getElementById('dca-saved-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + err.message + '</div>';
+    document.getElementById('dca-saved-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -2526,7 +2522,7 @@ function renderDcaList(){
   container.innerHTML = dcaCache.map(d => `
     <div class="j-entry">
       <div class="j-top">
-        <div><span class="j-ticker">${d.ticker}</span><span class="j-date" style="margin-left:8px;">${d.date}</span></div>
+        <div><span class="j-ticker">${esc(d.ticker)}</span><span class="j-date" style="margin-left:8px;">${esc(d.date)}</span></div>
         <span class="j-status ${badgeMap[d.verdictClass]||'status-open'}">${labelMap[d.verdictClass]||'-'}</span>
       </div>
       <div class="j-grid">
@@ -2536,7 +2532,7 @@ function renderDcaList(){
         <div><div class="k">Weekly</div><div class="v" style="font-size:11px; color:${d.weeklyTrend==='bullish' ? 'var(--green)' : d.weeklyTrend==='bearish' ? 'var(--red)' : 'var(--text-muted)'};">${d.weeklyTrend==='bullish' ? 'Bullish' : d.weeklyTrend==='bearish' ? 'Bearish' : '-'}</div></div>
       </div>
       <div class="j-actions">
-        <button data-action="recheck-dca" data-ticker="${d.ticker}">Cek ulang</button>
+        <button data-action="recheck-dca" data-ticker="${esc(d.ticker)}">Cek ulang</button>
         <button data-action="delete-dca" data-id="${d.id}">Hapus</button>
       </div>
     </div>
@@ -2606,34 +2602,7 @@ function fundLabel(score){
 
 // --- Ambil JSON dari Yahoo lewat rantai proxy yang sama dengan Timing DCA ---
 async function fundFetchJson(yahooUrl){
-  const enc = encodeURIComponent(yahooUrl);
-  const jinaTarget = yahooUrl.replace(/&/g, '%26');
-  const proxies = [
-    { url: `https://r.jina.ai/${jinaTarget}`, mode: 'jina' },
-    { url: `https://api.allorigins.win/raw?url=${enc}`, mode: 'plain' },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${enc}`, mode: 'plain' },
-    { url: `https://corsproxy.io/?url=${enc}`, mode: 'plain' },
-    { url: `https://api.allorigins.win/get?url=${enc}`, mode: 'wrapped' }
-  ];
-  let lastErr = null;
-  for(const proxy of proxies){
-    try{
-      const controller = new AbortController();
-      const timeoutId = setTimeout(()=> controller.abort(), 12000);
-      const res = await fetch(proxy.url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      if(proxy.mode === 'wrapped'){ const w = await res.json(); return JSON.parse(w.contents); }
-      if(proxy.mode === 'jina'){
-        const text = await res.text();
-        const i = text.indexOf('{');
-        if(i === -1) throw new Error('Format respons proxy tidak dikenali');
-        return JSON.parse(text.slice(i));
-      }
-      return await res.json();
-    }catch(e){ lastErr = e; }
-  }
-  throw new Error(lastErr ? (lastErr.name === 'AbortError' ? 'Semua proxy timeout (jaringan lambat/diblokir).' : lastErr.message) : 'Gagal mengambil data.');
+  return fetchYahooJson(yahooUrl, (d) => !!(d?.timeseries?.result || d?.chart?.result?.[0]));
 }
 
 const FUND_Q_TYPES = {
@@ -3095,7 +3064,7 @@ async function fundSaveHistory(r){
     eps: r.eps ?? null, bvps: r.bvps ?? null, gates: r.gate,
     nextReportLabel: r.nextReportLabel || null, nextReportDue: !!r.nextReportDue,
     savedDate: new Date().toISOString().slice(0,10),
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    updatedAt: serverTs()
   }, { merge: true });
 }
 
@@ -3160,14 +3129,14 @@ document.getElementById('btn-fm-save').addEventListener('click', async () => {
   btn.disabled = true;
   try{
     const date = fundQuarterEnd(m.q, m.year);
-    await fundManualRef().doc(m.ticker + '_' + date).set({ ...m, period: date, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    await fundManualRef().doc(m.ticker + '_' + date).set({ ...m, period: date, updatedAt: serverTs() });
     btn.textContent = 'Tersimpan ✓';
     // langsung hitung ulang skor ticker ini
     document.getElementById('fund-ticker').value = m.ticker;
     setTimeout(() => { btn.textContent = 'Simpan laporan kuartal'; btn.disabled = false; }, 1500);
     setTimeout(() => document.getElementById('btn-fund-analyze').click(), 600);
   }catch(e){
-    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>';
+    errBox.innerHTML = '<div class="err">Gagal menyimpan: ' + esc(e.message) + '</div>';
     btn.disabled = false;
   }
 });
@@ -3524,10 +3493,10 @@ function fundRenderPosition(){
       const err = document.getElementById('fp-err');
       if(!(lot > 0) || !(avg > 0)){ err.innerHTML = '<div class="err">Jumlah lot dan harga rata-rata harus diisi.</div>'; return; }
       try{
-        await fundPositionsRef().doc(r.ticker).set({ ticker: r.ticker, lot, avgPrice: avg, kategori: document.getElementById('fp-kat').value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        await fundPositionsRef().doc(r.ticker).set({ ticker: r.ticker, lot, avgPrice: avg, kategori: document.getElementById('fp-kat').value, updatedAt: serverTs() });
         fundPosEditing = false;
         fundRenderPosition();
-      }catch(e){ err.innerHTML = '<div class="err">Gagal menyimpan: ' + e.message + '</div>'; }
+      }catch(e){ err.innerHTML = '<div class="err">Gagal menyimpan: ' + esc(e.message) + '</div>'; }
     });
     const cancel = document.getElementById('fp-cancel');
     if(cancel) cancel.addEventListener('click', () => { fundPosEditing = false; fundRenderPosition(); });
@@ -3628,13 +3597,13 @@ function subscribeFund(){
     fundHistoryCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     fundRenderHistory();
   }, err => {
-    document.getElementById('fund-history-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + err.message + '</div>';
+    document.getElementById('fund-history-list').innerHTML = '<div class="err">Gagal memuat riwayat: ' + esc(err.message) + '</div>';
   });
   unsubscribeFundManual = fundManualRef().onSnapshot(snap => {
     fundManualCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     fundRenderManualList();
   }, err => {
-    document.getElementById('fm-list').innerHTML = '<div class="err">Gagal memuat input manual: ' + err.message + '</div>';
+    document.getElementById('fm-list').innerHTML = '<div class="err">Gagal memuat input manual: ' + esc(err.message) + '</div>';
   });
 }
 
@@ -3807,8 +3776,44 @@ function exitDemo(){
   location.href = url.toString();
 }
 
-document.getElementById('btn-demo').addEventListener('click', enterDemo);
+document.getElementById('btn-demo').addEventListener('click', () => { location.search = '?demo'; });
 document.getElementById('btn-demo-exit').addEventListener('click', exitDemo);
+
+// ==================== BOOT ====================
+// Mode demo (?demo) tidak memuat SDK Firebase sama sekali dan tidak membaca sesi login,
+// jadi selalu menampilkan data contoh walaupun browser sedang login ke akun asli.
+const FIREBASE_SDK_BASE = 'https://www.gstatic.com/firebasejs/10.13.0/';
+function loadScript(src){
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error('Gagal memuat ' + src));
+    document.head.appendChild(el);
+  });
+}
+async function loadFirebaseSdk(){
+  await loadScript(FIREBASE_SDK_BASE + 'firebase-app-compat.js');
+  await Promise.all(['auth', 'firestore'].map(n => loadScript(FIREBASE_SDK_BASE + 'firebase-' + n + '-compat.js')));
+}
+function initFirebase(){
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.firestore();
+  radarApp = firebase.initializeApp(radarFirebaseConfig, 'radarApp');
+  radarAuth = radarApp.auth();
+  radarDb = radarApp.firestore();
+  radarAuth.onAuthStateChanged(handleRadarAuthState);
+  auth.onAuthStateChanged(handleAuthState);
+}
+
+if(new URLSearchParams(location.search).has('demo')){
+  enterDemo();
+} else {
+  loadFirebaseSdk().then(initFirebase).catch(() => {
+    document.getElementById('loading-screen').textContent = 'Gagal memuat layanan login. Periksa koneksi internet lalu muat ulang halaman.';
+  });
+}
 </script>
 </body>
 </html>

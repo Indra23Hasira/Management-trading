@@ -1,0 +1,40 @@
+rules_version = '2';
+// =====================================================================
+// Firestore rules untuk project management-trading
+//
+// Prinsip:
+//  - Setiap pengguna hanya bisa membaca dan menulis datanya sendiri di users/{uid}/...
+//    (pemilik dicek lewat UID login, bukan email).
+//  - Daftar koleksi disebut satu per satu. Koleksi yang tidak disebut otomatis DITOLAK,
+//    jadi tidak ada aturan "catch-all".
+//  - Pengguna yang belum login tidak bisa membaca atau menulis apa pun.
+//  - Mode demo aplikasi tidak memakai Firebase, jadi tidak butuh aturan khusus.
+//
+// Cara pasang: Firebase Console → Firestore Database → Rules → ganti SELURUH isi dengan
+// file ini → Publish. Rules di GitHub tidak aktif sendiri sebelum di-publish di console.
+// =====================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // Dokumen users/{uid} sendiri tidak dipakai aplikasi, jadi tidak dibuka.
+
+      match /entry_plans/{docId}    { allow read, write: if isOwner(userId); } // Rencana Entry
+      match /risk_trades/{docId}    { allow read, write: if isOwner(userId); } // Jurnal Trading
+      match /dividend_sims/{docId}  { allow read, write: if isOwner(userId); } // Simulasi Dividen
+      match /dca_analysis/{docId}   { allow read, write: if isOwner(userId); } // Timing DCA
+      match /fund_history/{docId}   { allow read, write: if isOwner(userId); } // Cek Fundamental: riwayat skor
+      match /fund_manual/{docId}    { allow read, write: if isOwner(userId); } // Cek Fundamental: input laporan kuartal
+      match /fund_positions/{docId} { allow read, write: if isOwner(userId); } // Cek Fundamental: posisi
+
+      // Pengaturan: hanya dua dokumen ini yang dipakai (Batas Posisi & Aturan Keuangan)
+      match /meta/{docId} {
+        allow read, write: if isOwner(userId) && docId in ['sizing', 'aturanKeuangan'];
+      }
+    }
+  }
+}
